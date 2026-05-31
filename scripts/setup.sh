@@ -65,7 +65,7 @@ pip show fastapi uvicorn python-multipart | grep -E "^(Name|Version):"
 
 # ── Data directories ──────────────────────────────────────────────────────────
 
-for d in data/nodes data/items data/uploads; do
+for d in data/items data/cells data/uploads; do
   mkdir -p "$d"
   echo "  $d/ ready"
 done

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import config
 from app.models import ItemDocument, ItemType, PlaceItemRequest, RenamePortalRequest
-from app.spatial import haversine_meters, path_for_coordinate
+from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
@@ -83,14 +83,6 @@ def get_default_dimension() -> dict[str, str]:
     return {"root_id": storage.get_default_dimension_root_id()}
 
 
-@app.get("/api/nodes/{node_id}")
-def get_node(node_id: str) -> dict:
-    node = storage.get_node(node_id)
-    if node is None:
-        raise HTTPException(status_code=404, detail="Node not found")
-    return node.model_dump(mode="json")
-
-
 @app.get("/api/items/{item_id}")
 def get_item(item_id: str) -> dict:
     item = storage.get_item(item_id)
@@ -126,8 +118,6 @@ def place_item(root_id: str, request: PlaceItemRequest) -> dict:
     if request.type == ItemType.PORTAL_MARKER:
         _validate_portal_spacing(root_id, request.latitude, request.longitude)
 
-    quadrants = path_for_coordinate(request.latitude, request.longitude, config.TREE_DEPTH)
-    node_id = storage.ensure_path(root_id=root_id, quadrants=quadrants)
     cell_id = h3.latlng_to_cell(request.latitude, request.longitude, config.H3_RESOLUTION)
 
     item = ItemDocument(
@@ -140,11 +130,9 @@ def place_item(root_id: str, request: PlaceItemRequest) -> dict:
         portal_name=portal_name if request.type == ItemType.PORTAL_MARKER else None,
         content_text=request.content_text,
         content_upload_path=request.content_upload_path,
-        node_id=node_id,
         dimension_root_id=root_id,
     )
     storage.save_item(item)
-    storage.add_item_to_node(node_id=node_id, item_id=item.id)
     storage.add_item_to_cell(root_id=root_id, cell_id=cell_id, item_id=item.id)
     return item.model_dump(mode="json")
 
@@ -182,12 +170,8 @@ def pick_up_item(
             )
 
     cell_id = h3.latlng_to_cell(item.latitude, item.longitude, config.H3_RESOLUTION)
-    storage.remove_item_from_node(item.node_id, item_id)
     storage.remove_item_from_cell(root_id=root_id, cell_id=cell_id, item_id=item_id)
     storage.delete_item(item_id)
-
-    quadrants = path_for_coordinate(item.latitude, item.longitude, config.TREE_DEPTH)
-    storage.prune_empty_nodes(root_id, quadrants)
 
     return {"deleted": item_id}
 
@@ -229,8 +213,6 @@ async def place_photo(
 ) -> dict:
     _validate_accuracy(accuracy_meters)
 
-    quadrants = path_for_coordinate(latitude, longitude, config.TREE_DEPTH)
-    node_id = storage.ensure_path(root_id=root_id, quadrants=quadrants)
     cell_id = h3.latlng_to_cell(latitude, longitude, config.H3_RESOLUTION)
 
     suffix = Path(file.filename or "upload.bin").suffix
@@ -254,11 +236,9 @@ async def place_photo(
         accuracy_meters=accuracy_meters,
         content_text=content_text,
         content_upload_path=upload_path,
-        node_id=node_id,
         dimension_root_id=root_id,
     )
     storage.save_item(item)
-    storage.add_item_to_node(node_id=node_id, item_id=item.id)
     storage.add_item_to_cell(root_id=root_id, cell_id=cell_id, item_id=item.id)
     return item.model_dump(mode="json")
 

@@ -76,6 +76,6 @@ curl http://localhost:8000/api/dimensions/default
 ## Data layout
 
 - `data/meta.json` - dimension metadata
-- `data/nodes/<uuid>.json` - spatial nodes
 - `data/items/<uuid>.json` - item documents
+- `data/cells/{dimension_root_id}__{cell_id}.json` - H3 cell membership index
 - `data/uploads/<uuid>-<filename>` - uploaded photos

@@ -54,8 +54,19 @@ Each file payload:
 
 - Added `/api/dimensions/{root_id}/cells/{cell_id}/item-ids` for index fan-out.
 - Client `loadNearby` now performs GET fan-out with cache and local distance filtering.
+- Client `loadViewportPortals` now performs the same cell fan-out pattern for viewport portal markers.
 - `/api/dimensions/{root_id}/nearby` is no longer part of nearby discovery.
-- Legacy `/resolve-node` path is no longer needed for nearby discovery.
+- Legacy `/resolve-node`, `/api/nodes/{node_id}`, and quadtree node files are gone.
+
+## Retired quadtree layer
+
+The earlier degree-bisection node tree has now been removed completely:
+
+- `node_id` is no longer stored on items.
+- `data/nodes/` is no longer written or read.
+- `TREE_DEPTH`, `Quadrant`, `NodeDocument`, and quadtree path computation have been deleted.
+
+Placement and pickup now maintain only the H3 cell index.
 
 ## Migration compatibility
 
