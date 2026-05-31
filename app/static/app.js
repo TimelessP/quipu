@@ -26,6 +26,8 @@ const state = {
 
 const PICKUP_RANGE_METERS = 30; // range for item pickup AND local portal selection
 const RANGE_RING_VISIBLE_ZOOM = 18;
+const INVENTORY_TEXTAREA_MIN_ROWS = 4;
+const INVENTORY_TEXTAREA_MAX_ROWS = 12;
 const H3_RESOLUTION = 12;
 const MIN_PORTAL_SPACING_METERS = 8;
 const PORTAL_REMOVE_RANGE_METERS = 8;
@@ -666,6 +668,22 @@ function classifyItemType(contentText, hasImage) {
   return "letter";
 }
 
+function autoResizeTextareaWithinRows(textarea, minRows, maxRows) {
+  if (!textarea) return;
+  const styles = getComputedStyle(textarea);
+  const lineHeight = parseFloat(styles.lineHeight) || 20;
+  const verticalPadding = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+  const verticalBorder = (parseFloat(styles.borderTopWidth) || 0) + (parseFloat(styles.borderBottomWidth) || 0);
+
+  const minHeight = (lineHeight * minRows) + verticalPadding + verticalBorder;
+  const maxHeight = (lineHeight * maxRows) + verticalPadding + verticalBorder;
+
+  textarea.style.height = "auto";
+  const nextHeight = Math.max(minHeight, Math.min(maxHeight, textarea.scrollHeight));
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
 function isVirtualShiftActive() {
   return Math.abs(state.virtualOffset.lat) > 1e-12 || Math.abs(state.virtualOffset.lng) > 1e-12;
 }
@@ -1163,7 +1181,6 @@ function setRemotePortal(item) {
   state.selectedRemotePortalId = item.id;
   state.selectedRemotePortalPos = { latitude: item.latitude, longitude: item.longitude };
   savePortalSession();
-  updatePortalOffsetFromSelection();
   renderPortalSelection();
   updatePortalHud();
   notify("Portal link configured. Use Portal when standing by the source portal.", "success", 2600);
@@ -1361,13 +1378,13 @@ function renderItemList(items) {
 
     const li = document.createElement("li");
     li.className = "inventory-item";
-    const textPart = item.content_text ? `<div>${escapeHtml(item.content_text)}</div>` : "";
+    const textPart = item.content_text ? `<div class="item-content-text">${escapeHtml(item.content_text)}</div>` : "";
     const photoPart = item.content_upload_path
-      ? `<img src="${item.content_upload_path}" alt="photo" style="max-width:100%; border-radius:8px;" />`
+      ? `<img class="item-photo" src="${item.content_upload_path}" alt="photo" />`
       : "";
     li.innerHTML = `
       <strong>${item.type}</strong> by ${escapeHtml(item.owner)}${distLabel}<br />
-      <small>${new Date(item.placement_timestamp).toLocaleString()}</small>
+      <small class="item-meta">${new Date(item.placement_timestamp).toLocaleString()}</small>
       ${textPart}
       ${photoPart}
     `;
@@ -2134,16 +2151,24 @@ function renderInventory() {
     li.className = "inventory-item";
 
     const header = document.createElement("div");
+    header.className = "inventory-meta";
     header.innerHTML = `<strong>${item.type}</strong> — picked up <small>${new Date(item.placement_timestamp).toLocaleString()}</small>`;
     li.appendChild(header);
 
     let textareaEl = null;
     if (item.content_text) {
       textareaEl = document.createElement("textarea");
-      textareaEl.rows = 3;
-      textareaEl.style.width = "100%";
+      textareaEl.className = "inventory-textarea";
+      textareaEl.rows = INVENTORY_TEXTAREA_MIN_ROWS;
       textareaEl.value = item.content_text || "";
+      const applyBounds = () => autoResizeTextareaWithinRows(
+        textareaEl,
+        INVENTORY_TEXTAREA_MIN_ROWS,
+        INVENTORY_TEXTAREA_MAX_ROWS
+      );
+      textareaEl.addEventListener("input", applyBounds);
       li.appendChild(textareaEl);
+      requestAnimationFrame(applyBounds);
     }
 
     if ((item.type === "photograph" && item.content_upload_path) || item.content_data_url) {

@@ -298,7 +298,14 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.65rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+  padding: 0.2rem 0 0.55rem;
+  margin: -0.2rem 0 0.65rem;
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
 }
 
 .modal-close {
@@ -360,6 +367,27 @@ h2 {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.55rem;
+}
+
+.inventory-item .item-meta {
+  display: block;
+  margin-bottom: 0.45rem;
+}
+
+#location-items-list li > small {
+  display: block;
+  margin-bottom: 0.45rem;
+}
+
+.inventory-item .item-content-text {
+  margin-top: 0;
+}
+
+.inventory-item .item-photo {
+  display: block;
+  margin-top: 0.45rem;
+  max-width: 100%;
+  border-radius: 8px;
 }
 
 .portal-link-summary {
@@ -550,6 +578,15 @@ button:hover {
   border-radius: 10px;
   padding: 0.6rem;
   background: rgba(255, 255, 255, 0.45);
+}
+
+.inventory-item .inventory-meta {
+  margin-bottom: 0.45rem;
+}
+
+.inventory-item .inventory-textarea {
+  width: 100%;
+  resize: none;
 }
 
 .inventory-actions {
