@@ -271,62 +271,6 @@ def get_cell_item_ids(root_id: str, cell_id: str) -> dict:
     return {"item_ids": list(cell.get("item_ids", []))}
 
 
-@app.get("/api/dimensions/{root_id}/items-in-bbox")
-def get_items_in_bbox(
-    root_id: str,
-    min_lat: float,
-    max_lat: float,
-    min_lng: float,
-    max_lng: float,
-    item_type: ItemType | None = None,
-) -> dict:
-    if min_lat > max_lat or min_lng > max_lng:
-        raise HTTPException(status_code=400, detail="Invalid bbox")
-
-    # Enumerate only the H3 cells that intersect the bbox — bounded object-store GETs, no scan.
-    outer = [
-        (min_lat, min_lng),
-        (min_lat, max_lng),
-        (max_lat, max_lng),
-        (max_lat, min_lng),
-    ]
-    try:
-        cells = h3.h3shape_to_cells(h3.LatLngPoly(outer), config.H3_RESOLUTION)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid bbox for H3 cell computation") from exc
-
-    if len(cells) > config.MAX_BBOX_CELLS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Bbox spans {len(cells)} cells, exceeds maximum of {config.MAX_BBOX_CELLS}. "
-                "Zoom in further."
-            ),
-        )
-
-    seen_ids: set[str] = set()
-    found: list[ItemDocument] = []
-    for cell in cells:
-        cell_data = storage.get_cell(root_id, cell)
-        if not cell_data:
-            continue
-        for item_id in cell_data.get("item_ids", []):
-            if item_id in seen_ids:
-                continue
-            seen_ids.add(item_id)
-            item = storage.get_item(item_id)
-            if item is None:
-                continue
-            if item_type is not None and item.type != item_type:
-                continue
-            # Final precision filter — cells at bbox edge may contain items just outside it.
-            if not (min_lat <= item.latitude <= max_lat and min_lng <= item.longitude <= max_lng):
-                continue
-            found.append(item)
-
-    return {"items": [item.model_dump(mode="json") for item in found]}
-
-
 app.mount("/uploads", StaticFiles(directory=config.UPLOADS_DIR), name="uploads")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 

@@ -1,7 +1,8 @@
-# Scaling gap: viewport portal loading still via bbox endpoint
+# ~~Scaling gap: viewport portal loading still via bbox endpoint~~ — RESOLVED
 
 **Date noted:** 2026-05-31  
-**Status:** Known gap — server-side violation replaced with bounded lookup, client-side contract not yet complete.
+**Date resolved:** 2026-05-31  
+**Status:** ✓ Complete — contract fully met.
 
 ---
 

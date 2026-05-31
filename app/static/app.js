@@ -34,6 +34,9 @@ const INVENTORY_TEXTAREA_MAX_ROWS = 12;
 const PORTAL_VIEWPORT_FETCH_ZOOM = 18;
 const PORTAL_CACHE_TTL_MS = 5 * 60 * 1000;
 const H3_RESOLUTION = 12;
+// Hard cap on viewport cell fan-out. At res 12 a zoom-18 mobile viewport is ~10-40 cells;
+// 200 is a comfortable ceiling that prevents accidental global queries.
+const MAX_VIEWPORT_CELLS = 200;
 const MIN_PORTAL_SPACING_METERS = 8;
 const PORTAL_REMOVE_RANGE_METERS = 8;
 const inventoryKey = "quipuInventoryV1";
@@ -2185,19 +2188,12 @@ async function loadNearby(lat, lng, preferCache = true) {
 async function loadViewportPortals(preferCache = true) {
   if (!state.map || !state.dimensionRootId) return;
 
-  const bounds = state.map.getBounds();
-  const key = `${state.dimensionRootId}:bbox:${bounds.getSouth().toFixed(3)}:${bounds.getWest().toFixed(3)}:${bounds.getNorth().toFixed(3)}:${bounds.getEast().toFixed(3)}`;
   const zoom = state.map.getZoom();
+  const bounds = state.map.getBounds();
 
+  // Below the fetch zoom, preserve whatever we have in the viewport set (avoids
+  // wiping portal markers while zoomed out) but don't issue new requests.
   if (zoom < PORTAL_VIEWPORT_FETCH_ZOOM) {
-    const cached = cachePeekEntry(key)?.value;
-    state.viewportPortalItems = cached?.items || [];
-    if (cached) {
-      cacheTouch(key);
-    }
-    for (const item of state.viewportPortalItems) {
-      updatePortalItemsInState(item);
-    }
     state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
     renderMapItems();
     renderPortalSelection();
@@ -2206,17 +2202,46 @@ async function loadViewportPortals(preferCache = true) {
     return;
   }
 
-  const cachedEntry = cachePeekEntry(key);
+  const h3Api = window.h3;
+  if (!h3Api || !h3Api.polygonToCells) {
+    console.warn("H3 client library unavailable — viewport portal load skipped");
+    return;
+  }
+
+  // Client computes the covering cells deterministically — no query logic on the server.
+  // polygonToCells expects [[lat, lng], ...] vertices; Leaflet bounds give us the four corners.
+  const viewportPoly = [
+    [bounds.getSouth(), bounds.getWest()],
+    [bounds.getSouth(), bounds.getEast()],
+    [bounds.getNorth(), bounds.getEast()],
+    [bounds.getNorth(), bounds.getWest()],
+  ];
+  let cells;
+  try {
+    cells = h3Api.polygonToCells(viewportPoly, H3_RESOLUTION);
+  } catch (e) {
+    console.warn("polygonToCells failed:", e);
+    return;
+  }
+
+  if (cells.length > MAX_VIEWPORT_CELLS) {
+    // Viewport too large to fan out safely — this should only happen if the user is
+    // extremely zoomed out past PORTAL_VIEWPORT_FETCH_ZOOM on a huge display.
+    console.warn(`Viewport spans ${cells.length} cells (>${MAX_VIEWPORT_CELLS}), skipping portal load.`);
+    return;
+  }
+
+  // Stable cache key for the whole viewport: sort cells so pan order doesn't create duplicates.
+  const viewportKey = `${state.dimensionRootId}:vp:${cells.slice().sort().join(",")}`;
+  const cachedEntry = cachePeekEntry(viewportKey);
   const cached = cachedEntry?.value || null;
-  const cacheAgeMs = cachedEntry ? getCacheAgeMs(key) : null;
+  const cacheAgeMs = cachedEntry ? getCacheAgeMs(viewportKey) : null;
   const cacheIsFresh = cached && cacheAgeMs !== null && cacheAgeMs <= PORTAL_CACHE_TTL_MS;
 
   if (cacheIsFresh) {
     state.viewportPortalItems = cached.items || [];
-    cacheTouch(key);
-    for (const item of state.viewportPortalItems) {
-      updatePortalItemsInState(item);
-    }
+    cacheTouch(viewportKey);
+    for (const item of state.viewportPortalItems) updatePortalItemsInState(item);
     state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
     renderMapItems();
     renderPortalSelection();
@@ -2225,36 +2250,47 @@ async function loadViewportPortals(preferCache = true) {
     return;
   }
 
-  const query = new URLSearchParams({
-    min_lat: String(bounds.getSouth()),
-    max_lat: String(bounds.getNorth()),
-    min_lng: String(bounds.getWest()),
-    max_lng: String(bounds.getEast()),
-    item_type: "portal_marker",
-  });
-
   try {
-    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items-in-bbox?${query.toString()}`);
-    if (!response.ok) throw new Error(await response.text());
-    const payload = await response.json();
-    state.viewportPortalItems = payload.items || [];
-    cacheWrite(key, payload);
-    for (const item of state.viewportPortalItems) {
-      updatePortalItemsInState(item);
-    }
+    // One keyed GET per cell — server is a pure object store, no query logic.
+    const cellPayloads = await Promise.all(
+      cells.map((cellId) => {
+        const cellKey = `${state.dimensionRootId}:cell:${cellId}`;
+        const url = `/api/dimensions/${state.dimensionRootId}/cells/${cellId}/item-ids`;
+        return fetchJsonWithCache(cellKey, url, preferCache).catch(() => ({ item_ids: [] }));
+      })
+    );
+
+    const itemIds = Array.from(new Set(cellPayloads.flatMap((p) => p.item_ids || [])));
+    const items = (
+      await Promise.all(
+        itemIds.map((itemId) => {
+          const itemKey = `item:${itemId}`;
+          const url = `/api/items/${itemId}`;
+          return fetchJsonWithCache(itemKey, url, preferCache).catch((error) => {
+            if (error?.status === 404) reconcileMissingItem(itemId);
+            return null;
+          });
+        })
+      )
+    ).filter(Boolean);
+
+    const portalItems = items.filter((item) => item.type === "portal_marker");
+    cacheWrite(viewportKey, { items: portalItems });
+
+    state.viewportPortalItems = portalItems;
+    for (const item of state.viewportPortalItems) updatePortalItemsInState(item);
     state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
     renderMapItems();
     renderPortalSelection();
     updatePortalHud();
     drawPortalLink();
-  } catch {
-    const fallbackCached = cachePeekEntry(key)?.value || cachedEntry?.value || null;
-    if (fallbackCached) {
-      state.viewportPortalItems = fallbackCached.items || [];
-      cacheTouch(key);
-      for (const item of state.viewportPortalItems) {
-        updatePortalItemsInState(item);
-      }
+  } catch (err) {
+    console.error("Failed to load viewport portals", err);
+    const fallback = cachePeekEntry(viewportKey)?.value || null;
+    if (fallback) {
+      state.viewportPortalItems = fallback.items || [];
+      cacheTouch(viewportKey);
+      for (const item of state.viewportPortalItems) updatePortalItemsInState(item);
       state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
       renderMapItems();
       renderPortalSelection();
