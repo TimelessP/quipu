@@ -577,6 +577,12 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
+  align-items: stretch;
+}
+
+.portal-nearby-actions > button,
+.favorite-actions > button {
+  min-width: 0;
 }
 
 .portal-modal-actions,
@@ -609,6 +615,26 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.35rem;
   margin-top: 0.45rem;
+}
+
+.favorite-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.portal-share-button {
+  min-height: 2.3rem;
+  display: inline-flex;
+  place-items: center;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.portal-share-button .icon-svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
 }
 
 .debug-spoof-panel {
@@ -850,11 +876,14 @@ button:focus-visible {
   .inventory-actions,
   .portal-modal-actions,
   .debug-modal-actions,
-  .portal-nearby-actions,
-  .favorite-actions,
   .location-item-actions,
   .items-modal-grid {
     grid-template-columns: 1fr;
+  }
+
+  .portal-nearby-actions,
+  .favorite-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .app-shell.menu-open .menu-scrim {

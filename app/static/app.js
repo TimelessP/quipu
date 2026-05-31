@@ -10,6 +10,7 @@ const state = {
   mapRotationMode: "heading",
   virtualOffset: { lat: 0, lng: 0 },
   followPlayer: true,
+  sharedPortalFocusActive: false,
   hasInitialCenter: false,
   programmaticMapMove: false,
   map: null,
@@ -39,6 +40,8 @@ const H3_RESOLUTION = 12;
 const MAX_VIEWPORT_CELLS = 200;
 const MIN_PORTAL_SPACING_METERS = 8;
 const PORTAL_REMOVE_RANGE_METERS = 8;
+const SHARED_PORTAL_LAT_PARAM = "portal_lat";
+const SHARED_PORTAL_LNG_PARAM = "portal_lng";
 const inventoryKey = "quipuInventoryV1";
 
 // Restore persisted inventory
@@ -55,6 +58,7 @@ const customLocCKey = "quipuGpsLocC";
 const themeChoiceKey = "quipuThemeChoiceV1";
 const portalFavoritesKey = "quipuPortalFavoritesV1";
 const clientStateKey = "quipuClientStateV1";
+const followRepairKey = "quipuFollowRepairV1";
 
 hydrateClientState();
 
@@ -700,9 +704,13 @@ function getEffectiveActorPosition() {
   return getVirtualPosition() || state.physicalPosition;
 }
 
+function isFollowingPlayer() {
+  return Boolean(state.followPlayer) && !state.sharedPortalFocusActive;
+}
+
 function updateFollowIndicator() {
   if (!followToggleButtonEl) return;
-  const isFollowing = Boolean(state.followPlayer);
+  const isFollowing = isFollowingPlayer();
   followToggleButtonEl.dataset.follow = isFollowing ? "on" : "off";
   const label = isFollowing ? "Following player" : "Center on player";
   followToggleButtonEl.setAttribute("aria-label", label);
@@ -1112,6 +1120,7 @@ function applyVirtualOffset(nextOffset, options = {}) {
     lng: Number.isFinite(nextOffset?.lng) ? nextOffset.lng : 0,
   };
   if (recenterFollow) {
+    state.sharedPortalFocusActive = false;
     state.followPlayer = true;
     updateFollowIndicator();
   }
@@ -1213,7 +1222,7 @@ function centerMapOnPlayerVirtual(forceZoom = false) {
 }
 
 function restoreFollowOnNextFrame() {
-  if (!state.map || !state.followPlayer || !getVirtualPosition()) return;
+  if (!state.map || !isFollowingPlayer() || !getVirtualPosition()) return;
 
   if (followRestoreFrameId !== null) {
     cancelAnimationFrame(followRestoreFrameId);
@@ -1222,7 +1231,7 @@ function restoreFollowOnNextFrame() {
 
   followRestoreFrameId = requestAnimationFrame(() => {
     followRestoreFrameId = null;
-    if (!state.map || !state.followPlayer || !getVirtualPosition()) return;
+    if (!state.map || !isFollowingPlayer() || !getVirtualPosition()) return;
     state.map.invalidateSize();
     centerMapOnPlayerVirtual(true);
   });
@@ -1312,7 +1321,7 @@ function refreshLocationAndNearby(preferCache = true) {
   updatePortalHud();
   loadNearby(virtual.lat, virtual.lng, preferCache);
 
-  if (state.followPlayer) {
+  if (isFollowingPlayer()) {
     if (!state.hasInitialCenter) {
       state.programmaticMapMove = true;
       state.map.setView([virtual.lat, virtual.lng], 18, { animate: false });
@@ -1540,7 +1549,11 @@ async function getDefaultDimension() {
 }
 
 function initMap() {
-  state.map = L.map("map", { maxZoom: 22 }).setView([0, 0], 2);
+  const initialVirtual = getVirtualPosition();
+  const initialCenter = initialVirtual ? [initialVirtual.lat, initialVirtual.lng] : [0, 0];
+  const initialZoom = initialVirtual ? 18 : 2;
+  state.hasInitialCenter = Boolean(initialVirtual);
+  state.map = L.map("map", { maxZoom: 22 }).setView(initialCenter, initialZoom, { animate: false });
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxNativeZoom: 19,
     maxZoom: 22,
@@ -1549,6 +1562,7 @@ function initMap() {
 
   state.map.on("movestart", () => {
     if (state.programmaticMapMove) return;
+    state.sharedPortalFocusActive = false;
     state.followPlayer = false;
     schedulePersistClientState();
     updateFollowIndicator();
@@ -2016,12 +2030,14 @@ function renderPortalModal() {
     actions.className = "favorite-actions";
 
     const removeButton = document.createElement("button");
-      removeButton.textContent = "Remove Favourite";
+    removeButton.textContent = "Remove Favourite";
     removeButton.addEventListener("click", () => {
       savePortalFavorites(loadPortalFavorites().filter((f) => f.id !== favorite.id));
       renderPortalModal();
     });
     actions.appendChild(removeButton);
+
+    actions.appendChild(createPortalShareButton(favorite));
 
     li.appendChild(actions);
     portalFavoritesListEl.appendChild(li);
@@ -2057,6 +2073,8 @@ function renderNearbyPortalList() {
     renameButton.textContent = "Rename";
     renameButton.addEventListener("click", () => renamePortal(portal));
     actions.appendChild(renameButton);
+
+    actions.appendChild(createPortalShareButton(portal));
 
     li.appendChild(actions);
     portalNearbyListEl.appendChild(li);
@@ -2590,6 +2608,107 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function buildPortalShareUrl(portalLike) {
+  const latitude = Number(portalLike?.latitude);
+  const longitude = Number(portalLike?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  const url = new URL(window.location.href);
+  url.searchParams.set(SHARED_PORTAL_LAT_PARAM, latitude.toFixed(6));
+  url.searchParams.set(SHARED_PORTAL_LNG_PARAM, longitude.toFixed(6));
+  return url.toString();
+}
+
+function createPortalShareButton(portalLike) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "portal-share-button";
+  button.setAttribute("aria-label", "Share portal link");
+  button.setAttribute("title", "Share portal link");
+  button.innerHTML = `<svg class="icon-svg icon-svg--stroke" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="6" cy="12" r="1.75"></circle><circle cx="17.5" cy="6" r="1.75"></circle><circle cx="17.5" cy="18" r="1.75"></circle><path d="M7.6 11.15 15.9 6.85M7.6 12.85l8.3 4.3"></path></svg><span>Share</span>`;
+  button.addEventListener("click", async () => {
+    const shareUrl = buildPortalShareUrl(portalLike);
+    if (!shareUrl) {
+      notify("Could not build share link for this portal.", "error", 2600);
+      return;
+    }
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ url: shareUrl });
+        return;
+      }
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        notify("Portal link copied.", "success", 2200);
+        return;
+      }
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(shareUrl);
+          notify("Portal link copied.", "success", 2200);
+          return;
+        } catch {
+          // Fall through to prompt.
+        }
+      }
+    }
+
+    window.prompt("Copy portal link:", shareUrl);
+  });
+  return button;
+}
+
+function getSharedPortalTargetFromUrl() {
+  const url = new URL(window.location.href);
+  const latitudeRaw = url.searchParams.get(SHARED_PORTAL_LAT_PARAM);
+  const longitudeRaw = url.searchParams.get(SHARED_PORTAL_LNG_PARAM);
+  if (latitudeRaw === null || longitudeRaw === null) return null;
+  const latitude = Number(latitudeRaw);
+  const longitude = Number(longitudeRaw);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return { lat: latitude, lng: longitude };
+}
+
+function clearSharedPortalParamsFromUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(SHARED_PORTAL_LAT_PARAM);
+  url.searchParams.delete(SHARED_PORTAL_LNG_PARAM);
+  history.replaceState(history.state, "", url.toString());
+}
+
+function repairFollowStateAfterSharedPortalRegression() {
+  if (localStorage.getItem(followRepairKey) === "done") return;
+  if (getSharedPortalTargetFromUrl()) return;
+  if (state.followPlayer) {
+    localStorage.setItem(followRepairKey, "done");
+    return;
+  }
+
+  state.sharedPortalFocusActive = false;
+  state.followPlayer = true;
+  persistClientStateNow();
+  localStorage.setItem(followRepairKey, "done");
+}
+
+async function applySharedPortalLocationFromUrl() {
+  const target = getSharedPortalTargetFromUrl();
+  if (!target || !state.map) return;
+
+  if (document.readyState !== "complete") {
+    await new Promise((resolve) => window.addEventListener("load", resolve, { once: true }));
+  }
+
+  state.sharedPortalFocusActive = true;
+  updateFollowIndicator();
+  state.programmaticMapMove = true;
+  state.map.setView([target.lat, target.lng], Math.max(state.map.getZoom(), 18), { animate: true });
+  clearSharedPortalParamsFromUrl();
+}
+
 window.addEventListener("online", async () => {
   setNetworkStatus();
   await replayQueue();
@@ -2605,6 +2724,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 followToggleButtonEl?.addEventListener("click", () => {
+  state.sharedPortalFocusActive = false;
   state.followPlayer = true;
   schedulePersistClientState();
   updateFollowIndicator();
@@ -2803,6 +2923,7 @@ window.addEventListener("keydown", (event) => {
 
   if (event.key === "r" || event.key === "R") {
     event.preventDefault();
+    state.sharedPortalFocusActive = false;
     state.followPlayer = true;
     schedulePersistClientState();
     updateFollowIndicator();
@@ -2843,6 +2964,7 @@ window.addEventListener("keydown", (event) => {
 themeCycleButtonEl?.addEventListener("click", cycleThemeChoice);
 settingsThemeCycleButtonEl?.addEventListener("click", cycleThemeChoice);
 settingsFollowPlayerButtonEl?.addEventListener("click", () => {
+  state.sharedPortalFocusActive = false;
   state.followPlayer = true;
   schedulePersistClientState();
   updateFollowIndicator();
@@ -3215,6 +3337,7 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function boot() {
+  repairFollowStateAfterSharedPortalRegression();
   initThemeMode();
   setNetworkStatus();
   initLocCInputs();
@@ -3239,6 +3362,7 @@ async function boot() {
   }
   beginGeolocation();
   await replayQueue();
+  await applySharedPortalLocationFromUrl();
 }
 
 boot();
