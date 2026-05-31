@@ -1430,11 +1430,7 @@ function initMap() {
       state.programmaticMapMove = false;
       return;
     }
-  });
 
-  state.map.on("zoomend", updatePlayerRangeRing);
-
-  state.map.on("moveend", () => {
     if (!state.physicalPosition) {
       updatePlayerMarkers();
     }
@@ -1443,6 +1439,8 @@ function initMap() {
     if (virtual) loadNearby(virtual.lat, virtual.lng, false);
     loadViewportPortals(false);
   });
+
+  state.map.on("zoomend", updatePlayerRangeRing);
 
   state.map.on("move", applyMapRotation);
   state.map.on("zoom", applyMapRotation);
@@ -2112,18 +2110,7 @@ async function loadNearby(lat, lng, preferCache = true) {
     }
 
     const centerCell = h3Api.latLngToCell(lat, lng, H3_RESOLUTION);
-    let edgeMeters = 10;
-    if (typeof h3Api.getHexagonEdgeLengthAvg === "function") {
-      const directMeters = Number(h3Api.getHexagonEdgeLengthAvg(H3_RESOLUTION, "m"));
-      if (Number.isFinite(directMeters) && directMeters > 0) {
-        edgeMeters = directMeters;
-      } else {
-        const km = Number(h3Api.getHexagonEdgeLengthAvg(H3_RESOLUTION, "km"));
-        if (Number.isFinite(km) && km > 0) {
-          edgeMeters = km * 1000;
-        }
-      }
-    }
+    const edgeMeters = getH3EdgeMeters(h3Api);
 
     const k = Math.max(1, Math.ceil(maxRangeMeters / edgeMeters));
     const candidateCells = h3Api.gridDisk(centerCell, k);
@@ -2216,23 +2203,40 @@ async function loadViewportPortals(preferCache = true) {
     [bounds.getNorth(), bounds.getEast()],
     [bounds.getNorth(), bounds.getWest()],
   ];
+  const center = bounds.getCenter();
+  const viewportRadiusMeters = Math.max(
+    haversineMeters(center.lat, center.lng, bounds.getNorth(), bounds.getEast()),
+    haversineMeters(center.lat, center.lng, bounds.getNorth(), bounds.getWest()),
+    haversineMeters(center.lat, center.lng, bounds.getSouth(), bounds.getEast()),
+    haversineMeters(center.lat, center.lng, bounds.getSouth(), bounds.getWest())
+  );
   let cells;
+  let viewportMode = "full";
   try {
     cells = h3Api.polygonToCells(viewportPoly, H3_RESOLUTION);
   } catch (e) {
     console.warn("polygonToCells failed:", e);
     return;
   }
+  const requestedCellCount = cells.length;
 
   if (cells.length > MAX_VIEWPORT_CELLS) {
-    // Viewport too large to fan out safely — this should only happen if the user is
-    // extremely zoomed out past PORTAL_VIEWPORT_FETCH_ZOOM on a huge display.
-    console.warn(`Viewport spans ${cells.length} cells (>${MAX_VIEWPORT_CELLS}), skipping portal load.`);
-    return;
+    // Fall back to a bounded local disk centered on the viewport midpoint. This keeps
+    // the fan-out deterministic and capped while still showing portals local to the user.
+    const maxRingK = Math.max(1, Math.floor((Math.sqrt(12 * MAX_VIEWPORT_CELLS - 3) - 3) / 6));
+    const edgeMeters = getH3EdgeMeters(h3Api);
+    const desiredK = Math.max(1, Math.ceil(viewportRadiusMeters / edgeMeters));
+    const fallbackK = Math.min(desiredK, maxRingK);
+    const centerCell = h3Api.latLngToCell(center.lat, center.lng, H3_RESOLUTION);
+    cells = h3Api.gridDisk(centerCell, fallbackK);
+    viewportMode = "local";
+    console.warn(
+      `Viewport spans ${requestedCellCount} cells; using ${cells.length} local fallback cells around center (requested ${desiredK}, capped at ${fallbackK}).`
+    );
   }
 
   // Stable cache key for the whole viewport: sort cells so pan order doesn't create duplicates.
-  const viewportKey = `${state.dimensionRootId}:vp:${cells.slice().sort().join(",")}`;
+  const viewportKey = `${state.dimensionRootId}:vp:${viewportMode}:${cells.slice().sort().join(",")}`;
   const cachedEntry = cachePeekEntry(viewportKey);
   const cached = cachedEntry?.value || null;
   const cacheAgeMs = cachedEntry ? getCacheAgeMs(viewportKey) : null;
@@ -2274,7 +2278,13 @@ async function loadViewportPortals(preferCache = true) {
       )
     ).filter(Boolean);
 
-    const portalItems = items.filter((item) => item.type === "portal_marker");
+    const portalItems = items.filter((item) => {
+      if (item.type !== "portal_marker") return false;
+      if (viewportMode === "full") {
+        return bounds.contains([item.latitude, item.longitude]);
+      }
+      return haversineMeters(center.lat, center.lng, item.latitude, item.longitude) <= viewportRadiusMeters;
+    });
     cacheWrite(viewportKey, { items: portalItems });
 
     state.viewportPortalItems = portalItems;
@@ -2298,6 +2308,22 @@ async function loadViewportPortals(preferCache = true) {
       drawPortalLink();
     }
   }
+}
+
+function getH3EdgeMeters(h3Api) {
+  let edgeMeters = 10;
+  if (typeof h3Api.getHexagonEdgeLengthAvg === "function") {
+    const directMeters = Number(h3Api.getHexagonEdgeLengthAvg(H3_RESOLUTION, "m"));
+    if (Number.isFinite(directMeters) && directMeters > 0) {
+      edgeMeters = directMeters;
+    } else {
+      const km = Number(h3Api.getHexagonEdgeLengthAvg(H3_RESOLUTION, "km"));
+      if (Number.isFinite(km) && km > 0) {
+        edgeMeters = km * 1000;
+      }
+    }
+  }
+  return edgeMeters;
 }
 
 function updatePosition(lat, lng, accuracy, heading = null, speed = null) {
