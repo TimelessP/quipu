@@ -13,6 +13,9 @@
   --chip-ink: #18412f;
   --chip-active-bg: linear-gradient(130deg, var(--accent), var(--accent-2));
   --chip-active-ink: #ffffff;
+  --compass-north: #d4483d;
+  --compass-south: #fff7ef;
+  --compass-core: #244637;
 }
 
 :root[data-theme="dark"] {
@@ -28,6 +31,9 @@
   --scroll-thumb: rgba(47, 189, 140, 0.7);
   --chip-bg: rgba(29, 45, 39, 0.95);
   --chip-ink: #c7e4d7;
+  --compass-north: #ff7a6b;
+  --compass-south: #dff5ea;
+  --compass-core: #102019;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -44,6 +50,9 @@
     --scroll-thumb: rgba(47, 189, 140, 0.7);
     --chip-bg: rgba(29, 45, 39, 0.95);
     --chip-ink: #c7e4d7;
+    --compass-north: #ff7a6b;
+    --compass-south: #dff5ea;
+    --compass-core: #102019;
   }
 }
 
@@ -150,6 +159,9 @@ h2 {
 .icon-svg {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+.icon-svg--stroke {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.85;
@@ -157,12 +169,17 @@ h2 {
   stroke-linejoin: round;
 }
 
-.theme-cycle {
-  position: relative;
+.icon-svg--option {
+  display: none;
 }
 
-.theme-cycle .theme-icon {
-  display: none;
+.icon-part--fill-current {
+  fill: currentColor;
+  stroke: none;
+}
+
+.theme-cycle {
+  position: relative;
 }
 
 .theme-cycle[data-choice="system"] .theme-system-icon,
@@ -176,12 +193,41 @@ h2 {
   display: block;
 }
 
-.follow-toggle .follow-icon {
-  display: none;
-}
-
 .follow-on-icon {
   stroke-width: 1.6;
+}
+
+.icon-svg--compass {
+  overflow: visible;
+  width: 1.7rem;
+  height: 1.7rem;
+}
+
+.icon-svg--compass .icon-part {
+  stroke: none;
+}
+
+.map-rotation-toggle {
+  --compass-angle: 0deg;
+}
+
+.icon-svg--compass .icon-compass-needle {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: rotate(var(--compass-angle));
+  transition: transform 140ms linear;
+}
+
+.icon-svg--compass .icon-part--compass-north {
+  fill: var(--compass-north);
+}
+
+.icon-svg--compass .icon-part--compass-south {
+  fill: var(--compass-south);
+}
+
+.icon-svg--compass .icon-part--compass-core {
+  fill: var(--compass-core);
 }
 
 .notice-banner {

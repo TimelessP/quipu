@@ -73,6 +73,7 @@ const gpsSpooferStatusEl = document.getElementById("gps-spoofer-status");
 const gpsWalkMetersEl = document.getElementById("gps-walk-meters");
 const mapRotationToggleButtonEl = document.getElementById("map-rotation-toggle");
 const portalReturnButtonEl = document.getElementById("portal-return-top");
+const portalUseNearestButtonEl = document.getElementById("portal-use-nearest-top");
 const menuToggleButtonEl = document.getElementById("menu-toggle");
 const themeCycleButtonEl = document.getElementById("theme-cycle");
 const devMenuEl = document.getElementById("dev-menu");
@@ -477,6 +478,11 @@ let geolocationWatchId = null;
 let firstFixTimeoutId = null;
 let deviceOrientationBound = false;
 let lastDeviceHeadingAt = 0;
+let targetHeading = null;
+let headingAnimationFrameId = null;
+let headingAnimationLastTs = 0;
+let preferredOrientationSource = null;
+let lastOrientationSourceAt = 0;
 
 function loadCustomLocC() {
   const raw = localStorage.getItem(customLocCKey);
@@ -847,35 +853,129 @@ function normalizeHeadingDelta(fromHeading, toHeading) {
   return ((((to - from) % 360) + 540) % 360) - 180;
 }
 
-function smoothHeading(currentHeading, nextHeading) {
-  const normalizedNext = normalizeHeading(nextHeading);
-  if (normalizedNext === null) return null;
-  const normalizedCurrent = normalizeHeading(currentHeading);
-  if (normalizedCurrent === null) return normalizedNext;
-
-  const delta = normalizeHeadingDelta(normalizedCurrent, normalizedNext);
-  if (delta === null || Math.abs(delta) < 1) return normalizedCurrent;
-
-  return normalizeHeading(normalizedCurrent + delta * 0.25);
+function stopHeadingAnimation() {
+  if (headingAnimationFrameId !== null) {
+    cancelAnimationFrame(headingAnimationFrameId);
+    headingAnimationFrameId = null;
+  }
+  headingAnimationLastTs = 0;
 }
 
-function extractDeviceHeading(event) {
+function stepHeadingAnimation(timestamp) {
+  headingAnimationFrameId = null;
+
+  const current = normalizeHeading(state.currentHeading);
+  const target = normalizeHeading(targetHeading);
+  if (current === null || target === null) {
+    stopHeadingAnimation();
+    return;
+  }
+
+  if (!headingAnimationLastTs) {
+    headingAnimationLastTs = timestamp;
+  }
+  const dt = Math.min(64, Math.max(8, timestamp - headingAnimationLastTs));
+  headingAnimationLastTs = timestamp;
+
+  const delta = normalizeHeadingDelta(current, target);
+  if (delta === null) {
+    stopHeadingAnimation();
+    return;
+  }
+
+  const distance = Math.abs(delta);
+  if (distance < 0.15) {
+    state.currentHeading = target;
+    applyMapRotation();
+    stopHeadingAnimation();
+    return;
+  }
+
+  // Time-based easing instead of event-step snapping.
+  // Small jitter moves very gently; large turns accelerate, but still settle smoothly.
+  const normalizedDistance = Math.min(1, distance / 180);
+  const baseStrength = 0.035;
+  const adaptiveStrength = normalizedDistance * 0.165;
+  const perFrameStrength = baseStrength + adaptiveStrength;
+  const easedStrength = 1 - Math.pow(1 - perFrameStrength, dt / 16.6667);
+
+  state.currentHeading = normalizeHeading(current + delta * easedStrength);
+  applyMapRotation();
+  headingAnimationFrameId = requestAnimationFrame(stepHeadingAnimation);
+}
+
+function queueHeadingTarget(nextHeading) {
+  const normalizedNext = normalizeHeading(nextHeading);
+  if (normalizedNext === null) return;
+
+  targetHeading = normalizedNext;
+  if (!Number.isFinite(state.currentHeading)) {
+    state.currentHeading = normalizedNext;
+    applyMapRotation();
+    stopHeadingAnimation();
+    return;
+  }
+
+  if (headingAnimationFrameId === null) {
+    headingAnimationFrameId = requestAnimationFrame(stepHeadingAnimation);
+  }
+}
+
+function getOrientationSourcePriority(source) {
+  if (source === "webkit") return 3;
+  if (source === "absolute") return 2;
+  return 1;
+}
+
+function classifyOrientationSource(event, sourceHint = "relative") {
+  if (Number.isFinite(event?.webkitCompassHeading)) return "webkit";
+  if (sourceHint === "absolute" || event?.absolute) return "absolute";
+  return "relative";
+}
+
+function shouldUseOrientationSource(source, now = Date.now()) {
+  if (!preferredOrientationSource || (now - lastOrientationSourceAt) > 4000) {
+    preferredOrientationSource = source;
+    lastOrientationSourceAt = now;
+    return true;
+  }
+
+  if (source === preferredOrientationSource) {
+    lastOrientationSourceAt = now;
+    return true;
+  }
+
+  if (getOrientationSourcePriority(source) > getOrientationSourcePriority(preferredOrientationSource)) {
+    preferredOrientationSource = source;
+    lastOrientationSourceAt = now;
+    return true;
+  }
+
+  return false;
+}
+
+function extractDeviceHeading(event, source = "relative") {
   if (!event) return null;
   if (Number.isFinite(event.webkitCompassHeading)) {
-    return normalizeHeading(event.webkitCompassHeading + getScreenOrientationAngle());
+    // Safari's webkitCompassHeading is already north-relative for the device heading.
+    // Adding screen orientation here can create 90-degree quadrant errors.
+    return normalizeHeading(event.webkitCompassHeading);
   }
   if (!Number.isFinite(event.alpha)) return null;
   const compassHeading = 360 - event.alpha;
   return normalizeHeading(compassHeading + getScreenOrientationAngle());
 }
 
-function handleDeviceOrientation(event) {
-  const heading = extractDeviceHeading(event);
+function handleDeviceOrientation(event, sourceHint = "relative") {
+  const source = classifyOrientationSource(event, sourceHint);
+  const now = Date.now();
+  if (!shouldUseOrientationSource(source, now)) return;
+
+  const heading = extractDeviceHeading(event, source);
   if (!Number.isFinite(heading)) return;
-  state.currentHeading = smoothHeading(state.currentHeading, heading);
-  lastDeviceHeadingAt = Date.now();
+  queueHeadingTarget(heading);
+  lastDeviceHeadingAt = now;
   schedulePersistClientState();
-  applyMapRotation();
 }
 
 async function beginDeviceOrientation() {
@@ -892,8 +992,8 @@ async function beginDeviceOrientation() {
     }
   }
 
-  window.addEventListener("deviceorientationabsolute", handleDeviceOrientation, true);
-  window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+  window.addEventListener("deviceorientationabsolute", (event) => handleDeviceOrientation(event, "absolute"), true);
+  window.addEventListener("deviceorientation", (event) => handleDeviceOrientation(event, "relative"), true);
   deviceOrientationBound = true;
 }
 
@@ -911,12 +1011,16 @@ function updateMapRotationButton() {
   const label = northUp ? "Map rotation: North up" : "Map rotation: Facing direction";
   mapRotationToggleButtonEl.setAttribute("aria-label", label);
   mapRotationToggleButtonEl.setAttribute("title", label);
+  mapRotationToggleButtonEl.style.setProperty("--compass-angle", `${getMapRotationAngle()}deg`);
 }
 
 function updateTopOverlayButtons() {
   updateMapRotationButton();
   if (portalReturnButtonEl) {
     portalReturnButtonEl.hidden = !isVirtualShiftActive();
+  }
+  if (portalUseNearestButtonEl) {
+    portalUseNearestButtonEl.hidden = !canUseNearestLinkedPortal();
   }
 }
 
@@ -1728,6 +1832,13 @@ function canUseCurrentPortalLink() {
   return d <= PICKUP_RANGE_METERS;
 }
 
+function canUseNearestLinkedPortal() {
+  if (!canUseCurrentPortalLink()) return false;
+  const nearestPhysical = getPhysicalNearbyPortals(PICKUP_RANGE_METERS)?.[0] || null;
+  if (!nearestPhysical?.portal?.id) return false;
+  return nearestPhysical.portal.id === state.selectedLocalPortalId;
+}
+
 function canClearCurrentPortalLink() {
   return canUseCurrentPortalLink() && !isVirtualShiftActive();
 }
@@ -2328,13 +2439,6 @@ function getH3EdgeMeters(h3Api) {
 
 function updatePosition(lat, lng, accuracy, heading = null, speed = null) {
   state.lastRealPosition = { lat, lng, accuracy };
-  if (Number.isFinite(heading)) {
-    const sampleSpeed = Number.isFinite(speed) ? speed : null;
-    const hasRecentDeviceHeading = Date.now() - lastDeviceHeadingAt < 5000;
-    if (!hasRecentDeviceHeading && (sampleSpeed === null || sampleSpeed >= 0.5)) {
-      state.currentHeading = smoothHeading(state.currentHeading, heading);
-    }
-  }
   if (state.gpsMode === "spoof") {
     schedulePersistClientState();
     return;
@@ -2513,6 +2617,14 @@ mapRotationToggleButtonEl?.addEventListener("click", () => {
 
 portalReturnButtonEl?.addEventListener("click", () => {
   returnToPhysicalPosition();
+});
+
+portalUseNearestButtonEl?.addEventListener("click", () => {
+  if (!canUseNearestLinkedPortal()) {
+    notify("Stand by the linked nearest portal to use it.", "error", 2800);
+    return;
+  }
+  jumpThroughPortalLink();
 });
 
 document.getElementById("action-open-items")?.addEventListener("click", () => {
