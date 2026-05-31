@@ -48,7 +48,6 @@ localStorage.setItem("quipuOwnerId", state.ownerId);
 
 const cacheKey = "quipuNearbyCacheV1";
 const queueKey = "quipuWriteQueueV1";
-const legacyPortalSessionKey = "quipuPortalLinkV1";
 const customLocCKey = "quipuGpsLocC";
 const themeChoiceKey = "quipuThemeChoiceV1";
 const portalFavoritesKey = "quipuPortalFavoritesV1";
@@ -244,33 +243,11 @@ function schedulePersistClientState() {
 function hydrateClientState() {
   let parsed = null;
   const raw = localStorage.getItem(clientStateKey);
-  const legacy = sessionStorage.getItem(legacyPortalSessionKey);
-  // Always clear deprecated key to avoid stale portal resurrection across reloads.
-  if (legacy !== null) {
-    sessionStorage.removeItem(legacyPortalSessionKey);
-  }
   if (raw) {
     try {
       parsed = JSON.parse(raw);
     } catch {
       parsed = null;
-    }
-  }
-
-  // One-time migration path from old session portal link storage.
-  if (!parsed) {
-    if (legacy) {
-      try {
-        const old = JSON.parse(legacy);
-        parsed = {
-          selectedLocalPortalId: old.local ?? null,
-          selectedRemotePortalId: old.remote ?? null,
-          selectedLocalPortalPos: old.localPos ?? null,
-          selectedRemotePortalPos: old.remotePos ?? null,
-        };
-      } catch {
-        parsed = null;
-      }
     }
   }
 

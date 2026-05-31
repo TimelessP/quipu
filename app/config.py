@@ -19,3 +19,7 @@ NEARBY_RADIUS_METERS = float(os.getenv("QUIPU_NEARBY_RADIUS_METERS", "30"))
 
 # H3 resolution for global spatial indexing. 12 is a practical default for file-backed indices.
 H3_RESOLUTION = int(os.getenv("QUIPU_H3_RESOLUTION", "12"))
+
+# Maximum number of H3 cells a single bbox query may cover. Guards against global-size fans.
+# At res 12 (~0.31 km² / cell) this allows roughly 150 km² before rejecting the request.
+MAX_BBOX_CELLS = int(os.getenv("QUIPU_MAX_BBOX_CELLS", "500"))

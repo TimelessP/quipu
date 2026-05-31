@@ -45,17 +45,32 @@ def _validate_accuracy(accuracy: float | None) -> None:
 
 
 def _validate_portal_spacing(root_id: str, latitude: float, longitude: float) -> None:
-    portals = [item for item in storage.iter_items_in_dimension(root_id) if item.type == ItemType.PORTAL_MARKER]
-    for portal in portals:
-        distance = haversine_meters(latitude, longitude, portal.latitude, portal.longitude)
-        if distance < MIN_PORTAL_SPACING_METERS:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Portal too close to existing portal ({distance:.1f}m). "
-                    f"Minimum spacing is {MIN_PORTAL_SPACING_METERS}m."
-                ),
-            )
+    # Bounded cell ring lookup — never a global scan.
+    # At H3 res 12 (edge ~9.4 m, inradius ~8.1 m) k=2 covers every point within
+    # MIN_PORTAL_SPACING_METERS of any location inside the center cell.
+    center_cell = h3.latlng_to_cell(latitude, longitude, config.H3_RESOLUTION)
+    candidate_cells = h3.grid_disk(center_cell, 2)
+    seen: set[str] = set()
+    for cell in candidate_cells:
+        cell_data = storage.get_cell(root_id, cell)
+        if not cell_data:
+            continue
+        for item_id in cell_data.get("item_ids", []):
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            item = storage.get_item(item_id)
+            if item is None or item.type != ItemType.PORTAL_MARKER:
+                continue
+            distance = haversine_meters(latitude, longitude, item.latitude, item.longitude)
+            if distance < MIN_PORTAL_SPACING_METERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Portal too close to existing portal ({distance:.1f}m). "
+                        f"Minimum spacing is {MIN_PORTAL_SPACING_METERS}m."
+                    ),
+                )
 
 
 @app.get("/health")
@@ -256,34 +271,6 @@ def get_cell_item_ids(root_id: str, cell_id: str) -> dict:
     return {"item_ids": list(cell.get("item_ids", []))}
 
 
-@app.get("/api/dimensions/{root_id}/resolve-node")
-def resolve_node_for_coordinate(root_id: str, lat: float, lng: float) -> dict:
-    """Resolve the sparse-tree node path for a coordinate without mutating storage."""
-    quadrants = path_for_coordinate(lat, lng, config.TREE_DEPTH)
-
-    current = storage.get_node(root_id)
-    if current is None:
-        return {"leaf_node_id": None, "node_path": [], "quadrants": [q.value for q in quadrants]}
-
-    node_path: list[str] = [current.id]
-    for q in quadrants:
-        child_id = current.children[q]
-        if child_id is None:
-            break
-        child = storage.get_node(child_id)
-        if child is None:
-            break
-        node_path.append(child.id)
-        current = child
-
-    leaf_node_id = node_path[-1] if node_path else None
-    return {
-        "leaf_node_id": leaf_node_id,
-        "node_path": node_path,
-        "quadrants": [q.value for q in quadrants],
-    }
-
-
 @app.get("/api/dimensions/{root_id}/items-in-bbox")
 def get_items_in_bbox(
     root_id: str,
@@ -296,15 +283,46 @@ def get_items_in_bbox(
     if min_lat > max_lat or min_lng > max_lng:
         raise HTTPException(status_code=400, detail="Invalid bbox")
 
-    items = storage.iter_items_in_dimension(root_id)
-    found: list[ItemDocument] = []
+    # Enumerate only the H3 cells that intersect the bbox — bounded object-store GETs, no scan.
+    outer = [
+        (min_lat, min_lng),
+        (min_lat, max_lng),
+        (max_lat, max_lng),
+        (max_lat, min_lng),
+    ]
+    try:
+        cells = h3.h3shape_to_cells(h3.LatLngPoly(outer), config.H3_RESOLUTION)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid bbox for H3 cell computation") from exc
 
-    for item in items:
-        if item_type is not None and item.type != item_type:
+    if len(cells) > config.MAX_BBOX_CELLS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Bbox spans {len(cells)} cells, exceeds maximum of {config.MAX_BBOX_CELLS}. "
+                "Zoom in further."
+            ),
+        )
+
+    seen_ids: set[str] = set()
+    found: list[ItemDocument] = []
+    for cell in cells:
+        cell_data = storage.get_cell(root_id, cell)
+        if not cell_data:
             continue
-        if not (min_lat <= item.latitude <= max_lat and min_lng <= item.longitude <= max_lng):
-            continue
-        found.append(item)
+        for item_id in cell_data.get("item_ids", []):
+            if item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            item = storage.get_item(item_id)
+            if item is None:
+                continue
+            if item_type is not None and item.type != item_type:
+                continue
+            # Final precision filter — cells at bbox edge may contain items just outside it.
+            if not (min_lat <= item.latitude <= max_lat and min_lng <= item.longitude <= max_lng):
+                continue
+            found.append(item)
 
     return {"items": [item.model_dump(mode="json") for item in found]}
 
