@@ -244,6 +244,11 @@ function schedulePersistClientState() {
 function hydrateClientState() {
   let parsed = null;
   const raw = localStorage.getItem(clientStateKey);
+  const legacy = sessionStorage.getItem(legacyPortalSessionKey);
+  // Always clear deprecated key to avoid stale portal resurrection across reloads.
+  if (legacy !== null) {
+    sessionStorage.removeItem(legacyPortalSessionKey);
+  }
   if (raw) {
     try {
       parsed = JSON.parse(raw);
@@ -254,7 +259,6 @@ function hydrateClientState() {
 
   // One-time migration path from old session portal link storage.
   if (!parsed) {
-    const legacy = sessionStorage.getItem(legacyPortalSessionKey);
     if (legacy) {
       try {
         const old = JSON.parse(legacy);
@@ -317,6 +321,46 @@ function hydrateClientState() {
   }
   if (isFinitePortalPos(parsed.selectedRemotePortalPos) || parsed.selectedRemotePortalPos === null) {
     state.selectedRemotePortalPos = parsed.selectedRemotePortalPos;
+  }
+}
+
+async function validateLinkedPortalSession() {
+  const selectedIds = [state.selectedLocalPortalId, state.selectedRemotePortalId]
+    .filter((id) => typeof id === "string" && id);
+  if (!selectedIds.length || !state.dimensionRootId) return;
+
+  const uniqueIds = Array.from(new Set(selectedIds));
+  const checks = await Promise.all(
+    uniqueIds.map(async (itemId) => {
+      try {
+        const response = await fetch(`/api/items/${itemId}`, { cache: "no-store" });
+        if (!response.ok) {
+          return { itemId, missing: response.status === 404, invalid: true };
+        }
+        const item = await response.json();
+        const invalid =
+          !item ||
+          item.type !== "portal_marker" ||
+          item.dimension_root_id !== state.dimensionRootId;
+        return { itemId, item, invalid, missing: false };
+      } catch {
+        return { itemId, missing: false, invalid: false };
+      }
+    })
+  );
+
+  let hadInvalid = false;
+  for (const check of checks) {
+    if (!check.invalid) {
+      if (check.item) updatePortalItemsInState(check.item);
+      continue;
+    }
+    hadInvalid = true;
+    reconcileMissingItem(check.itemId);
+  }
+
+  if (hadInvalid && (!state.selectedLocalPortalId || !state.selectedRemotePortalId)) {
+    clearPortalLink(false);
   }
 }
 
@@ -451,6 +495,8 @@ function initThemeMode() {
 
 let geolocationWatchId = null;
 let firstFixTimeoutId = null;
+let deviceOrientationBound = false;
+let lastDeviceHeadingAt = 0;
 
 function loadCustomLocC() {
   const raw = localStorage.getItem(customLocCKey);
@@ -659,6 +705,10 @@ function getVirtualPosition() {
   };
 }
 
+function getEffectiveActorPosition() {
+  return getVirtualPosition() || state.physicalPosition;
+}
+
 function updateFollowIndicator() {
   if (!followToggleButtonEl) return;
   const isFollowing = Boolean(state.followPlayer);
@@ -794,6 +844,16 @@ function updatePortalHud() {
   updateTopOverlayButtons();
 }
 
+function getScreenOrientationAngle() {
+  if (typeof screen !== "undefined" && Number.isFinite(screen?.orientation?.angle)) {
+    return screen.orientation.angle;
+  }
+  if (typeof window !== "undefined" && Number.isFinite(window.orientation)) {
+    return window.orientation;
+  }
+  return 0;
+}
+
 function normalizeHeading(heading) {
   if (!Number.isFinite(heading)) return null;
   const normalized = heading % 360;
@@ -817,6 +877,44 @@ function smoothHeading(currentHeading, nextHeading) {
   if (delta === null || Math.abs(delta) < 1) return normalizedCurrent;
 
   return normalizeHeading(normalizedCurrent + delta * 0.25);
+}
+
+function extractDeviceHeading(event) {
+  if (!event) return null;
+  if (Number.isFinite(event.webkitCompassHeading)) {
+    return normalizeHeading(event.webkitCompassHeading + getScreenOrientationAngle());
+  }
+  if (!Number.isFinite(event.alpha)) return null;
+  const compassHeading = 360 - event.alpha;
+  return normalizeHeading(compassHeading + getScreenOrientationAngle());
+}
+
+function handleDeviceOrientation(event) {
+  const heading = extractDeviceHeading(event);
+  if (!Number.isFinite(heading)) return;
+  state.currentHeading = smoothHeading(state.currentHeading, heading);
+  lastDeviceHeadingAt = Date.now();
+  schedulePersistClientState();
+  applyMapRotation();
+}
+
+async function beginDeviceOrientation() {
+  if (deviceOrientationBound) return;
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function") return;
+
+  const requestPermission = window.DeviceOrientationEvent?.requestPermission;
+  if (typeof requestPermission === "function") {
+    try {
+      const permission = await requestPermission.call(window.DeviceOrientationEvent);
+      if (permission !== "granted") return;
+    } catch {
+      return;
+    }
+  }
+
+  window.addEventListener("deviceorientationabsolute", handleDeviceOrientation, true);
+  window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+  deviceOrientationBound = true;
 }
 
 function getMapRotationAngle() {
@@ -916,6 +1014,50 @@ function updatePlayerRangeRing() {
   state.rangeRing.setRadius(PICKUP_RANGE_METERS);
 }
 
+function applyVirtualOffset(nextOffset, options = {}) {
+  const { recenterFollow = false, preferCache = true, persist = true } = options;
+  state.virtualOffset = {
+    lat: Number.isFinite(nextOffset?.lat) ? nextOffset.lat : 0,
+    lng: Number.isFinite(nextOffset?.lng) ? nextOffset.lng : 0,
+  };
+  if (recenterFollow) {
+    state.followPlayer = true;
+    updateFollowIndicator();
+  }
+  if (persist) {
+    schedulePersistClientState();
+  }
+  refreshLocationAndNearby(preferCache);
+  drawPortalLink();
+  renderNearbyItemList();
+  updatePortalHud();
+  applyMapRotation();
+}
+
+function resolveSelectedPortalPair() {
+  if (!state.selectedLocalPortalId || !state.selectedRemotePortalId) return null;
+  const local = state.displayItems.find((i) => i.id === state.selectedLocalPortalId) || state.selectedLocalPortalPos;
+  const remote = state.displayItems.find((i) => i.id === state.selectedRemotePortalId) || state.selectedRemotePortalPos;
+  if (!local || !remote) return null;
+  return { local, remote };
+}
+
+function syncSelectedPortalSnapshots(local, remote) {
+  state.selectedLocalPortalPos = {
+    id: state.selectedLocalPortalId,
+    latitude: local.latitude,
+    longitude: local.longitude,
+    portal_name: local.portal_name ?? null,
+  };
+  state.selectedRemotePortalPos = {
+    id: state.selectedRemotePortalId,
+    latitude: remote.latitude,
+    longitude: remote.longitude,
+    portal_name: remote.portal_name ?? null,
+  };
+  savePortalSession();
+}
+
 function jumpThroughPortalLink() {
   if (!state.selectedLocalPortalId || !state.selectedRemotePortalId) {
     notify("Set local and remote portals before jumping.", "error");
@@ -925,14 +1067,7 @@ function jumpThroughPortalLink() {
     notify("Stand by the linked source portal before using this portal.", "error", 2800);
     return;
   }
-  updatePortalOffsetFromSelection();
-  state.followPlayer = true;
-  schedulePersistClientState();
-  updateFollowIndicator();
-  refreshLocationAndNearby(true);
-  drawPortalLink();
-  renderNearbyItemList();
-  updatePortalHud();
+  updatePortalOffsetFromSelection({ activate: true, recenterFollow: true });
   notify("Jumped through portal link.", "success", 2200);
 }
 
@@ -941,14 +1076,7 @@ function returnToPhysicalPosition() {
     notify("Already at physical position.", "info", 1800);
     return;
   }
-  state.virtualOffset = { lat: 0, lng: 0 };
-  state.followPlayer = true;
-  schedulePersistClientState();
-  updateFollowIndicator();
-  refreshLocationAndNearby(true);
-  drawPortalLink();
-  renderNearbyItemList();
-  updatePortalHud();
+  applyVirtualOffset({ lat: 0, lng: 0 }, { recenterFollow: true, preferCache: true, persist: true });
   notify("Returned to physical position.", "success", 2200);
 }
 
@@ -957,16 +1085,12 @@ function clearPortalLink(showNotice = true) {
   state.selectedRemotePortalId = null;
   state.selectedLocalPortalPos = null;
   state.selectedRemotePortalPos = null;
-  state.virtualOffset = { lat: 0, lng: 0 };
-  schedulePersistClientState();
   if (state.portalLine) {
     state.map.removeLayer(state.portalLine);
     state.portalLine = null;
   }
-  refreshLocationAndNearby(true);
+  applyVirtualOffset({ lat: 0, lng: 0 }, { recenterFollow: false, preferCache: true, persist: true });
   renderPortalSelection();
-  renderNearbyItemList();
-  updatePortalHud();
   if (showNotice) {
     notify("Portal link cleared.", "info", 1800);
   }
@@ -1090,46 +1214,33 @@ function refreshLocationAndNearby(preferCache = true) {
   }
 }
 
-function updatePortalOffsetFromSelection() {
-  if (!state.selectedLocalPortalId || !state.selectedRemotePortalId) {
-    state.virtualOffset = { lat: 0, lng: 0 };
-    schedulePersistClientState();
-    updatePortalHud();
-    return;
+function updatePortalOffsetFromSelection(options = {}) {
+  const { activate = true, recenterFollow = false } = options;
+  const pair = resolveSelectedPortalPair();
+  if (!pair) {
+    if (activate) {
+      applyVirtualOffset({ lat: 0, lng: 0 }, { recenterFollow, preferCache: true, persist: true });
+    } else {
+      schedulePersistClientState();
+      updatePortalHud();
+    }
+    return false;
   }
 
-  const localFromItems = state.displayItems.find((i) => i.id === state.selectedLocalPortalId);
-  const remoteFromItems = state.displayItems.find((i) => i.id === state.selectedRemotePortalId);
-  const local = localFromItems || state.selectedLocalPortalPos;
-  const remote = remoteFromItems || state.selectedRemotePortalPos;
+  const { local, remote } = pair;
+  syncSelectedPortalSnapshots(local, remote);
 
-  if (!local || !remote) {
-    state.virtualOffset = { lat: 0, lng: 0 };
+  if (!activate) {
     schedulePersistClientState();
     updatePortalHud();
-    return;
+    return true;
   }
 
-  state.selectedLocalPortalPos = {
-    id: state.selectedLocalPortalId,
-    latitude: local.latitude,
-    longitude: local.longitude,
-    portal_name: local.portal_name ?? null,
-  };
-  state.selectedRemotePortalPos = {
-    id: state.selectedRemotePortalId,
-    latitude: remote.latitude,
-    longitude: remote.longitude,
-    portal_name: remote.portal_name ?? null,
-  };
-  savePortalSession();
-
-  state.virtualOffset = {
-    lat: remote.latitude - local.latitude,
-    lng: remote.longitude - local.longitude,
-  };
-  schedulePersistClientState();
-  updatePortalHud();
+  applyVirtualOffset(
+    { lat: remote.latitude - local.latitude, lng: remote.longitude - local.longitude },
+    { recenterFollow, preferCache: true, persist: true }
+  );
+  return true;
 }
 
 function cacheRead(key) {
@@ -1179,6 +1290,47 @@ function cacheWrite(key, value) {
   localStorage.setItem(cacheKey, JSON.stringify(data));
 }
 
+function invalidateItemCache(itemId) {
+  if (!itemId) return;
+
+  const raw = localStorage.getItem(cacheKey);
+  if (!raw) return;
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  let changed = false;
+  const directItemKey = `item:${itemId}`;
+  if (data[directItemKey]) {
+    delete data[directItemKey];
+    changed = true;
+  }
+
+  for (const [key, entry] of Object.entries(data)) {
+    const value = entry?.value;
+    if (!value) continue;
+
+    const hasItemInItems = Array.isArray(value.items) && value.items.some((item) => item?.id === itemId);
+    const hasItemInItemIds = Array.isArray(value.item_ids) && value.item_ids.includes(itemId);
+    if (!hasItemInItems && !hasItemInItemIds) continue;
+
+    delete data[key];
+    changed = true;
+  }
+
+  if (changed) {
+    localStorage.setItem(cacheKey, JSON.stringify(data));
+  }
+}
+
+function invalidatePortalCache(portalId) {
+  invalidateItemCache(portalId);
+}
+
 function getCacheAgeMs(key) {
   const entry = cachePeekEntry(key);
   if (!entry || !Number.isFinite(entry.touched)) return null;
@@ -1191,7 +1343,12 @@ async function fetchJsonWithCache(key, url, preferCache = true) {
     if (cached) return cached;
   }
   const response = await fetch(url);
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    const error = new Error(await response.text());
+    error.status = response.status;
+    error.url = url;
+    throw error;
+  }
   const payload = await response.json();
   cacheWrite(key, payload);
   return payload;
@@ -1390,6 +1547,71 @@ function updatePortalItemsInState(updatedItem) {
   syncPortalFavoritesFromItem(updatedItem);
 }
 
+function removeItemFromClientState(itemId) {
+  if (!itemId) return false;
+
+  let changed = false;
+  const listNames = ["nearbyItems", "viewportPortalItems", "displayItems", "inventory"];
+  for (const listName of listNames) {
+    const list = state[listName];
+    if (!Array.isArray(list) || !list.length) continue;
+    const next = list.filter((item) => item?.id !== itemId);
+    if (next.length !== list.length) {
+      state[listName] = next;
+      changed = true;
+    }
+  }
+
+  const marker = state.itemMarkers.get(itemId);
+  if (marker) {
+    state.map?.removeLayer(marker);
+    state.itemMarkers.delete(itemId);
+    changed = true;
+  }
+
+  if (state.selectedLocalPortalId === itemId) {
+    state.selectedLocalPortalId = null;
+    state.selectedLocalPortalPos = null;
+    changed = true;
+  }
+  if (state.selectedRemotePortalId === itemId) {
+    state.selectedRemotePortalId = null;
+    state.selectedRemotePortalPos = null;
+    changed = true;
+  }
+
+  const favorites = loadPortalFavorites();
+  const nextFavorites = favorites.filter((favorite) => favorite?.id !== itemId);
+  if (nextFavorites.length !== favorites.length) {
+    savePortalFavorites(nextFavorites);
+    changed = true;
+  }
+
+  if (changed) {
+    updatePortalOffsetFromSelection({ activate: false });
+    saveInventory();
+  }
+
+  return changed;
+}
+
+function reconcileMissingItem(itemId) {
+  if (!itemId) return;
+  invalidateItemCache(itemId);
+  const changed = removeItemFromClientState(itemId);
+  if (!changed) return;
+
+  state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
+  renderMapItems();
+  renderNearbyItemList();
+  renderInventory();
+  renderPortalSelection();
+  renderPortalModal();
+  updatePortalHud();
+  updateTopOverlayButtons();
+  drawPortalLink();
+}
+
 function syncPortalFavoritesFromItem(updatedItem) {
   if (!updatedItem?.id) return;
 
@@ -1464,13 +1686,13 @@ function onItemClicked(item) {
 }
 
 function getPhysicalNearbyPortals(maxMeters = PICKUP_RANGE_METERS) {
-  if (!state.physicalPosition) return;
-  const physical = state.physicalPosition;
+  const actor = getEffectiveActorPosition();
+  if (!actor) return;
   const portals = state.displayItems.filter((i) => i.type === "portal_marker");
   const nearby = portals
     .map((portal) => ({
       portal,
-      distance: haversineMeters(physical.lat, physical.lng, portal.latitude, portal.longitude),
+      distance: haversineMeters(actor.lat, actor.lng, portal.latitude, portal.longitude),
     }))
     .filter((entry) => entry.distance <= maxMeters)
     .sort((a, b) => a.distance - b.distance);
@@ -1508,6 +1730,8 @@ function setRemotePortal(item) {
   };
   savePortalSession();
   renderPortalSelection();
+  drawPortalLink();
+  applyMapRotation();
   updatePortalHud();
   notify("Portal link configured. Use Portal when standing by the source portal.", "success", 2600);
 }
@@ -1564,6 +1788,9 @@ function drawPortalLink() {
     ],
     { color: "#341a8d", weight: 3, dashArray: "8,6" }
   ).addTo(state.map);
+
+  state.portalLine.bringToFront();
+  state.portalLine.redraw();
 }
 
 function renderPortalSelection() {
@@ -1629,16 +1856,50 @@ function renderPortalModal() {
   if (!portalFavoritesListEl) return;
   portalFavoritesListEl.innerHTML = "";
   const favorites = loadPortalFavorites();
-  if (!favorites.length) {
+  let favoritesChanged = false;
+
+  const hydratedFavorites = favorites.map((favorite) => {
+    const livePortal = state.displayItems.find((item) => item.id === favorite.id);
+    if (!livePortal) return favorite;
+
+    const nextName = livePortal.portal_name ?? favorite.portal_name ?? null;
+    const nextFavorite = {
+      ...favorite,
+      latitude: livePortal.latitude,
+      longitude: livePortal.longitude,
+      portal_name: nextName,
+    };
+
+    if (
+      nextFavorite.latitude !== favorite.latitude ||
+      nextFavorite.longitude !== favorite.longitude ||
+      nextFavorite.portal_name !== favorite.portal_name
+    ) {
+      favoritesChanged = true;
+    }
+
+    return nextFavorite;
+  });
+
+  if (favoritesChanged) {
+    savePortalFavorites(hydratedFavorites);
+  }
+
+  const renderedFavorites = favoritesChanged ? hydratedFavorites : favorites;
+  if (!renderedFavorites.length) {
     const empty = document.createElement("li");
     empty.textContent = "No favourite portals yet.";
     portalFavoritesListEl.appendChild(empty);
     return;
   }
 
-  for (const favorite of favorites) {
+  for (const favorite of renderedFavorites) {
     const li = document.createElement("li");
-    li.innerHTML = `<strong>${escapeHtml(formatPortalLabel(favorite))}</strong><br /><small>${favorite.latitude.toFixed(6)}, ${favorite.longitude.toFixed(6)}</small>`;
+    const portalName = typeof favorite.portal_name === "string" && favorite.portal_name.trim()
+      ? favorite.portal_name.trim()
+      : "Unnamed portal";
+    const portalId = typeof favorite.id === "string" && favorite.id ? favorite.id.slice(0, 8) : "unknown";
+    li.innerHTML = `<strong>${escapeHtml(portalName)}</strong><br /><small>${favorite.latitude.toFixed(6)}, ${favorite.longitude.toFixed(6)} • ${escapeHtml(portalId)}...</small>`;
 
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
@@ -1715,7 +1976,8 @@ function renderNearbyPortalList() {
 
 async function renamePortal(portal) {
   if (!portal || portal.type !== "portal_marker") return;
-  if (!state.physicalPosition) return;
+  const actor = getEffectiveActorPosition();
+  if (!actor) return;
 
   const portalName = getPortalNameInputValue();
   if (!portalName) {
@@ -1728,14 +1990,22 @@ async function renamePortal(portal) {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        actor_latitude: state.physicalPosition.lat,
-        actor_longitude: state.physicalPosition.lng,
+        actor_latitude: actor.lat,
+        actor_longitude: actor.lng,
         portal_name: portalName,
       }),
     });
 
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) {
+      if (response.status === 404) {
+        reconcileMissingItem(portal.id);
+        notify("Portal no longer exists. Removed stale portal from your view.", "info", 2800);
+        return;
+      }
+      throw new Error(await response.text());
+    }
     const updated = await response.json();
+    invalidatePortalCache(updated.id || portal.id);
     updatePortalItemsInState(updated);
     renderMapItems();
     drawPortalLink();
@@ -1750,7 +2020,7 @@ async function renamePortal(portal) {
 function renderDebugModal() {
   const spoofHereButton = document.getElementById("debug-spoof-here");
   const useRealButton = document.getElementById("debug-use-real");
-  if (spoofHereButton) spoofHereButton.disabled = state.gpsMode === "spoof";
+  if (spoofHereButton) spoofHereButton.disabled = !getMapCenterOrPhysical();
   if (useRealButton) useRealButton.disabled = state.gpsMode === "real";
   syncSpoofAccuracyInput();
 }
@@ -1761,7 +2031,7 @@ function savePortalSession() {
 
 function loadPortalSession() {
   if (!state.selectedLocalPortalId && !state.selectedRemotePortalId) return;
-  updatePortalOffsetFromSelection();
+  updatePortalOffsetFromSelection({ activate: false });
   renderPortalSelection();
   updateTopOverlayButtons();
 }
@@ -1801,6 +2071,11 @@ function renderItemList(items) {
       ${textPart}
       ${photoPart}
     `;
+
+    const photoEl = li.querySelector(".item-photo");
+    if (photoEl) {
+      photoEl.addEventListener("error", () => reconcileMissingItem(item.id), { once: true });
+    }
 
     const actions = document.createElement("div");
     actions.className = "location-item-actions";
@@ -1887,7 +2162,12 @@ async function loadNearby(lat, lng, preferCache = true) {
         itemIds.map((itemId) => {
           const key = `item:${itemId}`;
           const url = `/api/items/${itemId}`;
-          return fetchJsonWithCache(key, url, preferCache).catch(() => null);
+          return fetchJsonWithCache(key, url, preferCache).catch((error) => {
+            if (error?.status === 404) {
+              reconcileMissingItem(itemId);
+            }
+            return null;
+          });
         })
       )
     ).filter(Boolean);
@@ -2011,7 +2291,8 @@ function updatePosition(lat, lng, accuracy, heading = null, speed = null) {
   state.lastRealPosition = { lat, lng, accuracy };
   if (Number.isFinite(heading)) {
     const sampleSpeed = Number.isFinite(speed) ? speed : null;
-    if (sampleSpeed === null || sampleSpeed >= 0.5) {
+    const hasRecentDeviceHeading = Date.now() - lastDeviceHeadingAt < 5000;
+    if (!hasRecentDeviceHeading && (sampleSpeed === null || sampleSpeed >= 0.5)) {
       state.currentHeading = smoothHeading(state.currentHeading, heading);
     }
   }
@@ -2296,7 +2577,6 @@ document.getElementById("portal-remove-nearby")?.addEventListener("click", async
 });
 
 document.getElementById("debug-spoof-here")?.addEventListener("click", () => {
-  if (state.gpsMode === "spoof") return;
   const p = getMapCenterOrPhysical();
   if (!p) {
     notify("No map position available.", "error");
@@ -2692,6 +2972,9 @@ function renderInventory() {
       img.src = item.content_upload_path || item.content_data_url;
       img.alt = "photo";
       img.style.cssText = "max-width:100%; border-radius:8px; display:block; margin:0.25rem 0;";
+      if (item.content_upload_path) {
+        img.addEventListener("error", () => reconcileMissingItem(item.id), { once: true });
+      }
       li.appendChild(img);
     }
 
@@ -2800,6 +3083,7 @@ async function boot() {
   initLocCInputs();
   refreshGpsSpooferStatus();
   initMap();
+  await beginDeviceOrientation();
   applyMapRotation();
   history.replaceState({ uiSessionId, uiStack: [] }, "", window.location.href);
   syncUiStack([]);
@@ -2809,6 +3093,7 @@ async function boot() {
   updatePortalHud();
   renderInventory();
   await getDefaultDimension();
+  await validateLinkedPortalSession();
   await loadViewportPortals(true);
   loadPortalSession();
   restoreFollowOnNextFrame();
