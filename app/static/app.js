@@ -453,6 +453,11 @@ function applyThemeChoice(choice) {
   }
 
   updateThemeButtons(safeChoice);
+  if (state.map) {
+    updatePlayerMarkers();
+    renderMapItems();
+    drawPortalLink();
+  }
 }
 
 function initThemeMode() {
@@ -1079,12 +1084,13 @@ function updatePlayerRangeRing() {
     return;
   }
 
+  const theme = getMapThemeColors();
   const ringStyle = {
     radius: PICKUP_RANGE_METERS,
-    color: "#138c64",
+    color: theme.range,
     weight: 2,
     opacity: 0.8,
-    fillColor: "#138c64",
+    fillColor: theme.range,
     fillOpacity: 0.08,
     interactive: false,
   };
@@ -1094,6 +1100,7 @@ function updatePlayerRangeRing() {
     return;
   }
 
+  state.rangeRing.setStyle(ringStyle);
   state.rangeRing.setLatLng([virtual.lat, virtual.lng]);
   state.rangeRing.setRadius(PICKUP_RANGE_METERS);
 }
@@ -1225,6 +1232,7 @@ function updatePlayerMarkers() {
   const virtual = getVirtualPosition();
   const physical = state.physicalPosition;
   if (!state.map) return;
+  const theme = getMapThemeColors();
 
   const markerPosition = virtual || (state.map ? state.map.getCenter() : null);
   if (!markerPosition) return;
@@ -1245,13 +1253,14 @@ function updatePlayerMarkers() {
     if (!state.bodyAnchorMarker) {
       state.bodyAnchorMarker = L.circleMarker([physical.lat, physical.lng], {
         radius: 7,
-        color: "#606975",
-        fillColor: "#606975",
+        color: theme.anchor,
+        fillColor: theme.anchor,
         fillOpacity: 0.3,
         weight: 2,
       }).addTo(state.map);
     } else {
       state.bodyAnchorMarker.setLatLng([physical.lat, physical.lng]);
+      state.bodyAnchorMarker.setStyle({ color: theme.anchor, fillColor: theme.anchor });
     }
   } else if (state.bodyAnchorMarker) {
     state.map.removeLayer(state.bodyAnchorMarker);
@@ -1259,6 +1268,22 @@ function updatePlayerMarkers() {
   }
 
   updatePlayerRangeRing();
+}
+
+function getCssVar(name, fallback = "") {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function getMapThemeColors() {
+  return {
+    range: getCssVar("--map-range", "#138c64"),
+    anchor: getCssVar("--map-anchor", "#606975"),
+    portal: getCssVar("--map-portal", "#6d3ef5"),
+    photo: getCssVar("--map-photo", "#f38b2a"),
+    letter: getCssVar("--map-letter", "#0e7a56"),
+    portalLine: getCssVar("--portal-line", "#341a8d"),
+  };
 }
 
 function getMapItemsForRender() {
@@ -1561,6 +1586,7 @@ function initMap() {
 }
 
 function drawItems(items) {
+  const theme = getMapThemeColors();
   for (const marker of state.itemMarkers.values()) {
     state.map.removeLayer(marker);
   }
@@ -1568,7 +1594,7 @@ function drawItems(items) {
 
   items.forEach((item) => {
     const color =
-      item.type === "portal_marker" ? "#6d3ef5" : item.type === "photograph" ? "#f38b2a" : "#0e7a56";
+      item.type === "portal_marker" ? theme.portal : item.type === "photograph" ? theme.photo : theme.letter;
 
     const marker = L.circleMarker([item.latitude, item.longitude], {
       radius: item.type === "portal_marker" ? 12 : 8,
@@ -1875,7 +1901,7 @@ function drawPortalLink() {
       [local.latitude, local.longitude],
       [remote.latitude, remote.longitude],
     ],
-    { color: "#341a8d", weight: 3, dashArray: "8,6" }
+    { color: getMapThemeColors().portalLine, weight: 3, dashArray: "8,6" }
   ).addTo(state.map);
 
   state.portalLine.bringToFront();
