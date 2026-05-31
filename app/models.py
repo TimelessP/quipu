@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Literal
+
+from pydantic import BaseModel, Field, HttpUrl
+
+
+class Quadrant(str, Enum):
+    NW = "nw"
+    NE = "ne"
+    SW = "sw"
+    SE = "se"
+
+
+class ItemType(str, Enum):
+    LETTER = "letter"
+    PHOTOGRAPH = "photograph"
+    PORTAL_MARKER = "portal_marker"
+
+
+class NodeDocument(BaseModel):
+    id: str
+    children: dict[Quadrant, str | None] = Field(
+        default_factory=lambda: {
+            Quadrant.NW: None,
+            Quadrant.NE: None,
+            Quadrant.SW: None,
+            Quadrant.SE: None,
+        }
+    )
+    items: list[str] = Field(default_factory=list)
+
+
+class ItemDocument(BaseModel):
+    id: str
+    type: ItemType
+    owner: str
+    placement_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    latitude: float
+    longitude: float
+    accuracy_meters: float | None = None
+    content_text: str | None = None
+    content_url: HttpUrl | None = None
+    content_upload_path: str | None = None
+    node_id: str
+    dimension_root_id: str
+
+
+class PlaceItemRequest(BaseModel):
+    type: Literal[ItemType.LETTER, ItemType.PORTAL_MARKER, ItemType.PHOTOGRAPH]
+    owner: str = Field(min_length=1, max_length=128)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_meters: float | None = Field(default=None, ge=0)
+    content_text: str | None = Field(default=None, max_length=5000)
+    # For re-placing a picked-up photograph: reference existing upload path
+    content_upload_path: str | None = None
+
+
+class PlacePhotoItemRequest(BaseModel):
+    owner: str = Field(min_length=1, max_length=128)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_meters: float | None = Field(default=None, ge=0)
+    content_text: str | None = Field(default=None, max_length=5000)
+
+
+class NearbyResponse(BaseModel):
+    node_id: str
+    items: list[ItemDocument]

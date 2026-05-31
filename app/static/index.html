@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quipu MVP</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <div id="map"></div>
+      <div id="menu-scrim" class="menu-scrim" aria-hidden="true"></div>
+
+      <div class="top-overlay">
+        <button id="menu-toggle" class="menu-toggle icon-toggle" aria-expanded="false" aria-controls="dev-menu" aria-label="Open main menu" title="Main menu" type="button">
+          <svg class="icon-svg icon-menu-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <button id="theme-cycle" class="theme-cycle icon-toggle" aria-label="Theme: System" title="Theme" type="button" data-choice="system">
+          <svg class="icon-svg theme-icon theme-system-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-choice="system">
+            <rect x="4.5" y="5" width="15" height="11" rx="1.8" />
+            <path d="M9 19h6M12 16v3" />
+          </svg>
+          <svg class="icon-svg theme-icon theme-light-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-choice="light">
+            <circle cx="12" cy="12" r="4.5" />
+            <path d="M12 2.5v2M12 19.5v2M4.5 12h2M17.5 12h2M6.1 6.1l1.4 1.4M16.5 16.5l1.4 1.4M17.9 6.1l-1.4 1.4M7.5 16.5l-1.4 1.4" />
+          </svg>
+          <svg class="icon-svg theme-icon theme-dark-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-choice="dark">
+            <path d="M14.9 3.2a8.25 8.25 0 1 0 5.9 13.9A9.75 9.75 0 0 1 14.9 3.2Z" />
+          </svg>
+        </button>
+        <button id="follow-toggle" class="follow-toggle icon-toggle" aria-label="Following player" title="Following player" type="button" data-follow="on">
+          <svg class="icon-svg follow-icon follow-on-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-follow="on">
+            <circle cx="12" cy="12" r="7" />
+            <path d="M12 5.5l2 5.5L19.5 12l-5.5 1.0L12 18.5l-2-5.5L5.5 12l5.5-1.0Z" />
+          </svg>
+          <svg class="icon-svg follow-icon follow-off-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-follow="off">
+            <circle cx="12" cy="12" r="4.5" />
+            <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2" />
+          </svg>
+        </button>
+      </div>
+
+      <div id="notice-banner" class="notice-banner" role="status" aria-live="polite" aria-atomic="true"></div>
+
+      <section id="player-actions" class="player-actions" aria-label="Player actions">
+        <h2>Player Actions</h2>
+        <div class="player-actions-grid">
+          <button id="action-open-items">Items</button>
+          <button id="action-open-portals">Portals</button>
+          <button id="action-open-debug">Debug</button>
+          <button id="action-close-player-menu">Close</button>
+        </div>
+      </section>
+
+      <div id="modal-scrim" class="modal-scrim" aria-hidden="true"></div>
+
+      <section id="items-modal" class="app-modal" aria-label="Items" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2>Items</h2>
+          <button id="items-modal-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div class="items-modal-grid">
+          <section class="items-column">
+            <div class="items-column-header">
+              <h3>At This Location</h3>
+              <button id="location-add-item" class="small-plus" type="button" aria-label="Add location item">+</button>
+            </div>
+            <ul id="location-items-list" class="modal-list"></ul>
+          </section>
+          <section class="items-column">
+            <div class="items-column-header">
+              <h3>Inventory</h3>
+              <button id="inventory-add-item" class="small-plus" type="button" aria-label="Add inventory item">+</button>
+            </div>
+            <ul id="inventory-items"></ul>
+          </section>
+        </div>
+      </section>
+
+      <section id="portals-modal" class="app-modal" aria-label="Portals" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2>Portals</h2>
+          <button id="portals-modal-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div id="portal-link-summary" class="portal-link-summary">No linked portal.</div>
+        <div class="portal-modal-actions">
+          <button id="portal-add-here" type="button">Add Portal Here</button>
+          <button id="portal-add-favorite" type="button">Add Nearby Portal To Favourites</button>
+          <button id="portal-use-link" type="button">Use Portal</button>
+          <button id="portal-return-physical" type="button">Return To Physical Location</button>
+          <button id="portal-clear-link" type="button">Clear Link</button>
+          <button id="portal-remove-nearby" type="button">Remove Nearby Portal</button>
+        </div>
+        <h3>Favourites</h3>
+        <ul id="portal-favorites-list" class="modal-list"></ul>
+      </section>
+
+      <section id="debug-modal" class="app-modal" aria-label="Debug" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2>Debug</h2>
+          <button id="debug-modal-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div class="debug-modal-actions">
+          <button id="debug-spoof-here" type="button">Spoof GPS Location Here</button>
+          <button id="debug-use-real" type="button">Use Real GPS Location</button>
+          <button id="debug-set-loc-c" type="button">Set Loc C At This Position</button>
+          <button id="debug-loc-a" type="button">Loc A</button>
+          <button id="debug-loc-b" type="button">Loc B</button>
+          <button id="debug-loc-c" type="button">Loc C</button>
+          <button id="debug-walk-north" type="button">North</button>
+          <button id="debug-walk-east" type="button">East</button>
+          <button id="debug-walk-south" type="button">South</button>
+          <button id="debug-walk-west" type="button">West</button>
+        </div>
+      </section>
+
+      <section id="settings-modal" class="app-modal" aria-label="Settings" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2>Settings</h2>
+          <button id="settings-modal-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div class="settings-modal-body">
+          <p>Adjust app behavior and appearance.</p>
+          <div class="settings-modal-actions">
+            <button id="settings-theme-cycle" type="button">Cycle Theme</button>
+            <button id="settings-follow-player" type="button">Center On Player</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="about-modal" class="app-modal" aria-label="About" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2>About</h2>
+          <button id="about-modal-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div class="about-modal-body">
+          <p><strong>Quipu MVP</strong> is a map-first field notebook with portals, items, and GPS-aware debug tools.</p>
+          <p>Use the overlay buttons or the main menu to move between map, settings, and about.</p>
+        </div>
+      </section>
+
+      <section id="item-add-modal" class="app-modal nested-modal" aria-label="Add item" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2>Add Item</h2>
+          <button id="item-add-close" class="modal-close" type="button">Close</button>
+        </div>
+        <form id="item-add-form" class="item-add-form">
+          <label>
+            Text
+            <textarea id="item-add-text" rows="4" placeholder="Optional text"></textarea>
+          </label>
+          <label>
+            Image
+            <input id="item-add-photo" type="file" accept="image/*" />
+          </label>
+          <div class="button-row button-row-2">
+            <button id="item-add-submit" type="submit">Submit</button>
+            <button id="item-add-cancel" type="button">Cancel</button>
+          </div>
+        </form>
+      </section>
+
+      <aside id="dev-menu" class="dev-menu" aria-label="Development controls">
+        <section class="panel status-panel">
+          <div class="panel-header">
+            <h1>Quipu MVP</h1>
+            <button id="menu-close" class="menu-close" aria-label="Close menu">Close</button>
+          </div>
+          <p>Map-first debug view with quick spoof + placement controls.</p>
+          <div class="menu-actions">
+            <button id="action-open-settings" type="button">Settings</button>
+            <button id="action-open-about" type="button">About</button>
+          </div>
+          <div id="network-status">Network: checking...</div>
+          <div id="dimension-status">Dimension: loading...</div>
+          <div id="location-status">Location: waiting for GPS...</div>
+          <p class="hint">Shortcuts: M menu, 1/2/3 locations, arrows walk, R re-center, Escape close.</p>
+        </section>
+        <section class="panel">
+          <h2>Mode</h2>
+          <div id="gps-spoofer-status">GPS Debug: using real GPS.</div>
+          <label>
+            Walk Amount (meters)
+            <input id="gps-walk-meters" type="number" min="1" step="1" value="10" />
+          </label>
+        </section>
+      </aside>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
