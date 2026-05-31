@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import config
-from app.models import ItemDocument, ItemType, PlaceItemRequest
+from app.models import ItemDocument, ItemType, PlaceItemRequest, RenamePortalRequest
 from app.spatial import haversine_meters, path_for_coordinate
 from app.storage import FileStorage
 
@@ -28,6 +28,7 @@ app.add_middleware(
 storage = FileStorage()
 MIN_PORTAL_SPACING_METERS = 8
 PORTAL_REMOVE_RANGE_METERS = 8
+PORTAL_NAME_RANGE_METERS = 30
 
 
 def _validate_accuracy(accuracy: float | None) -> None:
@@ -87,10 +88,14 @@ def get_item(item_id: str) -> dict:
 def place_item(root_id: str, request: PlaceItemRequest) -> dict:
     _validate_accuracy(request.accuracy_meters)
 
+    portal_name = request.portal_name.strip() if request.portal_name else None
+
     if request.type == ItemType.LETTER and not request.content_text:
         raise HTTPException(status_code=400, detail="content_text is required for letter items")
     if request.type == ItemType.PORTAL_MARKER and request.content_text:
         raise HTTPException(status_code=400, detail="portal_marker cannot include content_text")
+    if request.type != ItemType.PORTAL_MARKER and request.portal_name:
+        raise HTTPException(status_code=400, detail="portal_name is only allowed for portal markers")
     if request.type == ItemType.PHOTOGRAPH:
         if not request.content_upload_path:
             raise HTTPException(status_code=400, detail="content_upload_path required for photograph placement")
@@ -117,6 +122,7 @@ def place_item(root_id: str, request: PlaceItemRequest) -> dict:
         latitude=request.latitude,
         longitude=request.longitude,
         accuracy_meters=request.accuracy_meters,
+        portal_name=portal_name if request.type == ItemType.PORTAL_MARKER else None,
         content_text=request.content_text,
         content_upload_path=request.content_upload_path,
         node_id=node_id,
@@ -169,6 +175,31 @@ def pick_up_item(
     storage.prune_empty_nodes(root_id, quadrants)
 
     return {"deleted": item_id}
+
+
+@app.patch("/api/dimensions/{root_id}/items/{item_id}/portal-name")
+def rename_portal(root_id: str, item_id: str, request: RenamePortalRequest) -> dict:
+    item = storage.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.dimension_root_id != root_id:
+        raise HTTPException(status_code=403, detail="Item does not belong to this dimension")
+    if item.type != ItemType.PORTAL_MARKER:
+        raise HTTPException(status_code=400, detail="Only portal markers can be renamed")
+
+    distance = haversine_meters(request.actor_latitude, request.actor_longitude, item.latitude, item.longitude)
+    if distance > PORTAL_NAME_RANGE_METERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Portal naming requires physical presence within {PORTAL_NAME_RANGE_METERS}m "
+                f"(current distance: {distance:.1f}m)."
+            ),
+        )
+
+    item.portal_name = request.portal_name.strip()
+    storage.save_item(item)
+    return item.model_dump(mode="json")
 
 
 @app.post("/api/dimensions/{root_id}/photos")

@@ -31,6 +31,12 @@
             <path d="M14.9 3.2a8.25 8.25 0 1 0 5.9 13.9A9.75 9.75 0 0 1 14.9 3.2Z" />
           </svg>
         </button>
+        <button id="map-rotation-toggle" class="map-rotation-toggle icon-toggle" aria-label="Map rotation: Facing direction" title="Map rotation" type="button" data-rotation="heading">
+          <svg class="icon-svg icon-rotation-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="8" />
+            <path d="M12 4.5v4.25M12 19.5v-4.25M4.5 12h4.25M19.5 12h-4.25M12 8.25l2.5 3.75H9.5Z" />
+          </svg>
+        </button>
         <button id="follow-toggle" class="follow-toggle icon-toggle" aria-label="Following player" title="Following player" type="button" data-follow="on">
           <svg class="icon-svg follow-icon follow-on-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-follow="on">
             <circle cx="12" cy="12" r="7" />
@@ -39,6 +45,12 @@
           <svg class="icon-svg follow-icon follow-off-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-follow="off">
             <circle cx="12" cy="12" r="4.5" />
             <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2" />
+          </svg>
+        </button>
+        <button id="portal-return-top" class="portal-return-toggle icon-toggle" aria-label="Return to physical location" title="Return to physical location" type="button" hidden>
+          <svg class="icon-svg icon-return-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M10 8L6 12l4 4" />
+            <path d="M6 12h8.5a4.5 4.5 0 0 0 0-9H11" />
           </svg>
         </button>
       </div>
@@ -85,6 +97,11 @@
           <h2>Portals</h2>
           <button id="portals-modal-close" class="modal-close" type="button">Close</button>
         </div>
+        <div class="portal-name-panel">
+          <label for="portal-name-input">Portal Name</label>
+          <input id="portal-name-input" type="text" maxlength="80" placeholder="Name a portal near you" />
+          <p class="portal-name-hint">Naming and renaming only works when you are physically near the portal.</p>
+        </div>
         <div id="portal-link-summary" class="portal-link-summary">No linked portal.</div>
         <div class="portal-modal-actions">
           <button id="portal-add-here" type="button">Add Portal Here</button>
@@ -94,6 +111,8 @@
           <button id="portal-clear-link" type="button">Clear Link</button>
           <button id="portal-remove-nearby" type="button">Remove Nearby Portal</button>
         </div>
+        <h3>Nearby Portals</h3>
+        <ul id="portal-nearby-list" class="modal-list"></ul>
         <h3>Favourites</h3>
         <ul id="portal-favorites-list" class="modal-list"></ul>
       </section>
@@ -114,6 +133,11 @@
           <button id="debug-walk-east" type="button">East</button>
           <button id="debug-walk-south" type="button">South</button>
           <button id="debug-walk-west" type="button">West</button>
+        </div>
+        <div class="debug-spoof-panel">
+          <label for="gps-accuracy-override">Spoof Accuracy Override (m)</label>
+          <input id="gps-accuracy-override" type="number" min="0" step="0.1" placeholder="Auto" />
+          <p class="debug-spoof-hint">Used only in spoof mode. Lower numbers pass the server accuracy check more easily.</p>
         </div>
       </section>
 

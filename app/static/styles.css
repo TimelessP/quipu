@@ -120,6 +120,9 @@ h2 {
   z-index: 1100;
   pointer-events: none;
 }
+.portal-return-toggle[hidden] {
+  display: none;
+}
 
 .top-overlay > * {
   pointer-events: auto;
@@ -397,6 +400,38 @@ h2 {
   margin-bottom: 0.6rem;
 }
 
+.portal-name-panel {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.portal-name-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+#portal-name-input {
+  width: 100%;
+}
+
+#portal-nearby-list .portal-nearby-item {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.portal-nearby-meta {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.portal-nearby-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
 .portal-modal-actions,
 .debug-modal-actions {
   display: grid;
@@ -427,6 +462,17 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.35rem;
   margin-top: 0.45rem;
+}
+
+.debug-spoof-panel {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.debug-spoof-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 .item-add-form {
@@ -638,6 +684,7 @@ button:hover {
   .inventory-actions,
   .portal-modal-actions,
   .debug-modal-actions,
+  .portal-nearby-actions,
   .favorite-actions,
   .location-item-actions,
   .items-modal-grid {

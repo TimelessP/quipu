@@ -41,6 +41,7 @@ class ItemDocument(BaseModel):
     latitude: float
     longitude: float
     accuracy_meters: float | None = None
+    portal_name: str | None = None
     content_text: str | None = None
     content_url: HttpUrl | None = None
     content_upload_path: str | None = None
@@ -54,6 +55,7 @@ class PlaceItemRequest(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0)
+    portal_name: str | None = Field(default=None, max_length=128)
     content_text: str | None = Field(default=None, max_length=5000)
     # For re-placing a picked-up photograph: reference existing upload path
     content_upload_path: str | None = None
@@ -65,6 +67,12 @@ class PlacePhotoItemRequest(BaseModel):
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0)
     content_text: str | None = Field(default=None, max_length=5000)
+
+
+class RenamePortalRequest(BaseModel):
+    actor_latitude: float = Field(ge=-90, le=90)
+    actor_longitude: float = Field(ge=-180, le=180)
+    portal_name: str = Field(min_length=1, max_length=128)
 
 
 class NearbyResponse(BaseModel):

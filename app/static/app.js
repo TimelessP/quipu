@@ -5,6 +5,9 @@ const state = {
   lastRealPosition: null,
   gpsMode: "real",
   gpsSpoofLabel: null,
+  gpsAccuracyOverrideMeters: null,
+  currentHeading: null,
+  mapRotationMode: "heading",
   virtualOffset: { lat: 0, lng: 0 },
   followPlayer: true,
   hasInitialCenter: false,
@@ -28,6 +31,8 @@ const PICKUP_RANGE_METERS = 30; // range for item pickup AND local portal select
 const RANGE_RING_VISIBLE_ZOOM = 18;
 const INVENTORY_TEXTAREA_MIN_ROWS = 4;
 const INVENTORY_TEXTAREA_MAX_ROWS = 12;
+const PORTAL_VIEWPORT_FETCH_ZOOM = 18;
+const PORTAL_CACHE_TTL_MS = 5 * 60 * 1000;
 const H3_RESOLUTION = 12;
 const MIN_PORTAL_SPACING_METERS = 8;
 const PORTAL_REMOVE_RANGE_METERS = 8;
@@ -64,6 +69,8 @@ const portalSelectionEl = document.getElementById("portal-link-summary");
 const followToggleButtonEl = document.getElementById("follow-toggle");
 const gpsSpooferStatusEl = document.getElementById("gps-spoofer-status");
 const gpsWalkMetersEl = document.getElementById("gps-walk-meters");
+const mapRotationToggleButtonEl = document.getElementById("map-rotation-toggle");
+const portalReturnButtonEl = document.getElementById("portal-return-top");
 const menuToggleButtonEl = document.getElementById("menu-toggle");
 const themeCycleButtonEl = document.getElementById("theme-cycle");
 const devMenuEl = document.getElementById("dev-menu");
@@ -89,6 +96,9 @@ const settingsModalEl = document.getElementById("settings-modal");
 const aboutModalEl = document.getElementById("about-modal");
 const settingsThemeCycleButtonEl = document.getElementById("settings-theme-cycle");
 const settingsFollowPlayerButtonEl = document.getElementById("settings-follow-player");
+const portalNameInputEl = document.getElementById("portal-name-input");
+const portalNearbyListEl = document.getElementById("portal-nearby-list");
+const gpsAccuracyOverrideInputEl = document.getElementById("gps-accuracy-override");
 
 let prefersDarkMediaQuery = null;
 let noticeTimerId = null;
@@ -205,6 +215,9 @@ function persistClientStateNow() {
   const snapshot = {
     gpsMode: state.gpsMode,
     gpsSpoofLabel: state.gpsSpoofLabel,
+    gpsAccuracyOverrideMeters: Number.isFinite(state.gpsAccuracyOverrideMeters) ? state.gpsAccuracyOverrideMeters : null,
+    currentHeading: Number.isFinite(state.currentHeading) ? state.currentHeading : null,
+    mapRotationMode: state.mapRotationMode,
     physicalPosition: isFiniteLatLng(state.physicalPosition) ? state.physicalPosition : null,
     lastRealPosition: isFiniteLatLng(state.lastRealPosition) ? state.lastRealPosition : null,
     virtualOffset: {
@@ -265,6 +278,15 @@ function hydrateClientState() {
   if (typeof parsed.gpsSpoofLabel === "string" || parsed.gpsSpoofLabel === null) {
     state.gpsSpoofLabel = parsed.gpsSpoofLabel;
   }
+  if (Number.isFinite(parsed.gpsAccuracyOverrideMeters) || parsed.gpsAccuracyOverrideMeters === null) {
+    state.gpsAccuracyOverrideMeters = parsed.gpsAccuracyOverrideMeters;
+  }
+  if (Number.isFinite(parsed.currentHeading) || parsed.currentHeading === null) {
+    state.currentHeading = parsed.currentHeading;
+  }
+  if (parsed.mapRotationMode === "heading" || parsed.mapRotationMode === "north") {
+    state.mapRotationMode = parsed.mapRotationMode;
+  }
   if (isFiniteLatLng(parsed.physicalPosition)) {
     state.physicalPosition = parsed.physicalPosition;
   } else if (parsed.gpsMode === "real" && isFiniteLatLng(parsed.lastRealPosition)) {
@@ -320,6 +342,43 @@ function notify(message, kind = "info", timeoutMs = 2600) {
     noticeBannerEl.classList.remove("is-visible");
     noticeTimerId = null;
   }, timeoutMs);
+}
+
+function getSpoofAccuracyMeters() {
+  if (state.gpsMode !== "spoof") return null;
+  if (Number.isFinite(state.gpsAccuracyOverrideMeters) && state.gpsAccuracyOverrideMeters >= 0) {
+    return state.gpsAccuracyOverrideMeters;
+  }
+  return 3;
+}
+
+function getPlacementAccuracyMeters() {
+  if (!state.physicalPosition) return null;
+  const spoofAccuracy = getSpoofAccuracyMeters();
+  if (spoofAccuracy !== null) return spoofAccuracy;
+  return state.physicalPosition.accuracy ?? null;
+}
+
+function setSpoofAccuracyOverrideMeters(value) {
+  if (value === null) {
+    state.gpsAccuracyOverrideMeters = null;
+  } else if (Number.isFinite(value) && value >= 0) {
+    state.gpsAccuracyOverrideMeters = value;
+  } else {
+    return;
+  }
+
+  if (state.gpsMode === "spoof" && state.physicalPosition) {
+    state.physicalPosition = {
+      ...state.physicalPosition,
+      accuracy: getSpoofAccuracyMeters() ?? state.physicalPosition.accuracy,
+    };
+    refreshLocationAndNearby(false);
+  }
+
+  schedulePersistClientState();
+  refreshGpsSpooferStatus();
+  renderDebugModal();
 }
 
 function getThemeChoice() {
@@ -433,29 +492,46 @@ function refreshGpsSpooferStatus() {
   const locCLabel = customC ? formatLatLng(customC.lat, customC.lng) : "not set";
 
   if (state.gpsMode === "spoof" && state.physicalPosition) {
+    const accuracyLabel = Number.isFinite(state.physicalPosition.accuracy)
+      ? `${state.physicalPosition.accuracy.toFixed(1)}m`
+      : "n/a";
+    const overrideLabel = Number.isFinite(state.gpsAccuracyOverrideMeters)
+      ? `${state.gpsAccuracyOverrideMeters.toFixed(1)}m override`
+      : "default spoof accuracy";
     gpsSpooferStatusEl.textContent =
       `GPS Debug: SPOOF ON (${state.gpsSpoofLabel || "manual"}) at ${formatLatLng(state.physicalPosition.lat, state.physicalPosition.lng)}. ` +
-      `Saved Loc C: ${locCLabel}`;
+      `Accuracy: ${accuracyLabel} (${overrideLabel}). Saved Loc C: ${locCLabel}`;
     return;
   }
 
   gpsSpooferStatusEl.textContent = `GPS Debug: using real GPS. Saved Loc C: ${locCLabel}`;
 }
 
+function syncSpoofAccuracyInput() {
+  if (!gpsAccuracyOverrideInputEl) return;
+  gpsAccuracyOverrideInputEl.value = Number.isFinite(state.gpsAccuracyOverrideMeters)
+    ? String(state.gpsAccuracyOverrideMeters)
+    : "";
+  gpsAccuracyOverrideInputEl.disabled = state.gpsMode !== "spoof";
+}
+
 function setSpoofPosition(lat, lng, label) {
   state.gpsMode = "spoof";
   state.gpsSpoofLabel = label || "manual";
+  state.currentHeading = null;
   state.physicalPosition = {
     lat,
     lng,
-    accuracy: 3,
+    accuracy: getSpoofAccuracyMeters() ?? 3,
   };
   schedulePersistClientState();
   refreshGpsSpooferStatus();
+  syncSpoofAccuracyInput();
   refreshLocationAndNearby(false);
 }
 
 function setPresetSpoof(key) {
+  updateTopOverlayButtons();
   if (key === "C") {
     const custom = loadCustomLocC();
     if (!custom) {
@@ -514,6 +590,9 @@ function useRealGpsMode() {
   }
   schedulePersistClientState();
   refreshGpsSpooferStatus();
+  syncSpoofAccuracyInput();
+  updateTopOverlayButtons();
+  applyMapRotation();
   beginGeolocation();
 }
 
@@ -642,14 +721,25 @@ function loadPortalFavorites() {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((f) => Number.isFinite(f?.latitude) && Number.isFinite(f?.longitude));
+    return parsed
+      .filter((f) => Number.isFinite(f?.latitude) && Number.isFinite(f?.longitude))
+      .map((favorite) => normalizePortalFavorite(favorite));
   } catch {
     return [];
   }
 }
 
 function savePortalFavorites(favorites) {
-  localStorage.setItem(portalFavoritesKey, JSON.stringify(favorites));
+  localStorage.setItem(portalFavoritesKey, JSON.stringify(favorites.map((favorite) => normalizePortalFavorite(favorite))));
+}
+
+function normalizePortalFavorite(favorite) {
+  return {
+    id: typeof favorite?.id === "string" ? favorite.id : null,
+    latitude: Number(favorite?.latitude),
+    longitude: Number(favorite?.longitude),
+    portal_name: typeof favorite?.portal_name === "string" && favorite.portal_name.trim() ? favorite.portal_name.trim() : null,
+  };
 }
 
 function getMapCenterOrPhysical() {
@@ -701,6 +791,95 @@ function updatePortalHud() {
   if (portalsModalEl?.classList.contains("is-open")) {
     renderPortalModal();
   }
+  updateTopOverlayButtons();
+}
+
+function normalizeHeading(heading) {
+  if (!Number.isFinite(heading)) return null;
+  const normalized = heading % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
+}
+
+function normalizeHeadingDelta(fromHeading, toHeading) {
+  const from = normalizeHeading(fromHeading);
+  const to = normalizeHeading(toHeading);
+  if (from === null || to === null) return null;
+  return ((((to - from) % 360) + 540) % 360) - 180;
+}
+
+function smoothHeading(currentHeading, nextHeading) {
+  const normalizedNext = normalizeHeading(nextHeading);
+  if (normalizedNext === null) return null;
+  const normalizedCurrent = normalizeHeading(currentHeading);
+  if (normalizedCurrent === null) return normalizedNext;
+
+  const delta = normalizeHeadingDelta(normalizedCurrent, normalizedNext);
+  if (delta === null || Math.abs(delta) < 1) return normalizedCurrent;
+
+  return normalizeHeading(normalizedCurrent + delta * 0.25);
+}
+
+function getMapRotationAngle() {
+  if (state.mapRotationMode === "north") return 0;
+  const heading = normalizeHeading(state.currentHeading);
+  if (heading === null) return 0;
+  return -heading;
+}
+
+function updateMapRotationButton() {
+  if (!mapRotationToggleButtonEl) return;
+  const northUp = state.mapRotationMode === "north";
+  mapRotationToggleButtonEl.dataset.rotation = northUp ? "north" : "heading";
+  const label = northUp ? "Map rotation: North up" : "Map rotation: Facing direction";
+  mapRotationToggleButtonEl.setAttribute("aria-label", label);
+  mapRotationToggleButtonEl.setAttribute("title", label);
+}
+
+function updateTopOverlayButtons() {
+  updateMapRotationButton();
+  if (portalReturnButtonEl) {
+    portalReturnButtonEl.hidden = !isVirtualShiftActive();
+  }
+}
+
+function applyMapRotation() {
+  if (!state.map) return;
+
+  const angle = getMapRotationAngle();
+  const scale = state.mapRotationMode === "north" ? 1 : 1.45;
+  const mapPane = state.map.getPanes().mapPane;
+  if (!mapPane) return;
+  const mapContainer = state.map.getContainer?.() || document.getElementById("map");
+  const containerRect = mapContainer?.getBoundingClientRect?.();
+  const mapSize = containerRect && containerRect.width > 0 && containerRect.height > 0
+    ? { x: containerRect.width, y: containerRect.height }
+    : state.map.getSize();
+
+  const baseTransform = stripRotationTransform(mapPane.style.transform);
+  if (mapSize?.x > 0 && mapSize?.y > 0) {
+    mapPane.style.width = `${mapSize.x}px`;
+    mapPane.style.height = `${mapSize.y}px`;
+    mapPane.style.transformOrigin = `${mapSize.x / 2}px ${mapSize.y / 2}px`;
+  } else {
+    mapPane.style.transformOrigin = "50% 50%";
+  }
+  mapPane.style.transform = angle ? `${baseTransform} rotate(${angle}deg) scale(${scale})` : baseTransform;
+  mapPane.style.rotate = "";
+  mapPane.style.scale = "";
+
+  updateMapRotationButton();
+}
+
+function stripRotationTransform(transform) {
+  if (!transform) return "";
+  return transform.replace(/\s*rotate\([^)]*\)\s*scale\([^)]*\)\s*$/, "").trim();
+}
+
+function toggleMapRotationMode() {
+  state.mapRotationMode = state.mapRotationMode === "north" ? "heading" : "north";
+  schedulePersistClientState();
+  applyMapRotation();
+  updatePortalHud();
 }
 
 function updatePlayerRangeRing() {
@@ -931,8 +1110,18 @@ function updatePortalOffsetFromSelection() {
     return;
   }
 
-  state.selectedLocalPortalPos = { latitude: local.latitude, longitude: local.longitude };
-  state.selectedRemotePortalPos = { latitude: remote.latitude, longitude: remote.longitude };
+  state.selectedLocalPortalPos = {
+    id: state.selectedLocalPortalId,
+    latitude: local.latitude,
+    longitude: local.longitude,
+    portal_name: local.portal_name ?? null,
+  };
+  state.selectedRemotePortalPos = {
+    id: state.selectedRemotePortalId,
+    latitude: remote.latitude,
+    longitude: remote.longitude,
+    portal_name: remote.portal_name ?? null,
+  };
   savePortalSession();
 
   state.virtualOffset = {
@@ -944,6 +1133,25 @@ function updatePortalOffsetFromSelection() {
 }
 
 function cacheRead(key) {
+  const raw = localStorage.getItem(cacheKey);
+  if (!raw) return null;
+  const data = JSON.parse(raw);
+  const entry = data[key];
+  if (!entry) return null;
+  entry.touched = Date.now();
+  data[key] = entry;
+  localStorage.setItem(cacheKey, JSON.stringify(data));
+  return entry.value;
+}
+
+function cachePeekEntry(key) {
+  const raw = localStorage.getItem(cacheKey);
+  if (!raw) return null;
+  const data = JSON.parse(raw);
+  return data[key] || null;
+}
+
+function cacheTouch(key) {
   const raw = localStorage.getItem(cacheKey);
   if (!raw) return null;
   const data = JSON.parse(raw);
@@ -969,6 +1177,12 @@ function cacheWrite(key, value) {
   }
 
   localStorage.setItem(cacheKey, JSON.stringify(data));
+}
+
+function getCacheAgeMs(key) {
+  const entry = cachePeekEntry(key);
+  if (!entry || !Number.isFinite(entry.touched)) return null;
+  return Date.now() - entry.touched;
 }
 
 async function fetchJsonWithCache(key, url, preferCache = true) {
@@ -1093,6 +1307,11 @@ function initMap() {
     loadViewportPortals(false);
   });
 
+  state.map.on("move", applyMapRotation);
+  state.map.on("zoom", applyMapRotation);
+  state.map.on("zoomend", applyMapRotation);
+  state.map.on("resize", applyMapRotation);
+
   state.map.on("click", () => {
     setPlayerActionsOpen(false);
     if (!devMenuEl) return;
@@ -1120,17 +1339,114 @@ function drawItems(items) {
       weight: item.type === "portal_marker" ? 3 : 2,
     }).addTo(state.map);
 
+    if (item.type === "portal_marker") {
+      marker.bindTooltip(formatPortalLabel(item), { direction: "top", opacity: 0.9 });
+    }
+
     marker.on("click", () => onItemClicked(item));
     state.itemMarkers.set(item.id, marker);
   });
 }
 
-function mergeDisplayItems(nearbyItems, viewportPortalItems) {
+function formatPortalLabel(portal) {
+  if (!portal) return "Portal";
+  const name = typeof portal.portal_name === "string" ? portal.portal_name.trim() : "";
+  if (name) return name;
+  if (typeof portal.id === "string" && portal.id) return `Portal ${portal.id.slice(0, 8)}...`;
+  if (Number.isFinite(portal.latitude) && Number.isFinite(portal.longitude)) {
+    return `Portal ${portal.latitude.toFixed(4)}, ${portal.longitude.toFixed(4)}`;
+  }
+  return "Portal";
+}
+
+function updatePortalItemsInState(updatedItem) {
+  if (!updatedItem) return;
+
+  for (const listName of ["nearbyItems", "viewportPortalItems", "displayItems"]) {
+    const list = state[listName];
+    const index = list.findIndex((item) => item.id === updatedItem.id);
+    if (index >= 0) {
+      list[index] = updatedItem;
+    }
+  }
+
+  if (state.selectedLocalPortalId === updatedItem.id) {
+    state.selectedLocalPortalPos = {
+      id: updatedItem.id,
+      latitude: updatedItem.latitude,
+      longitude: updatedItem.longitude,
+      portal_name: updatedItem.portal_name ?? null,
+    };
+  }
+  if (state.selectedRemotePortalId === updatedItem.id) {
+    state.selectedRemotePortalPos = {
+      id: updatedItem.id,
+      latitude: updatedItem.latitude,
+      longitude: updatedItem.longitude,
+      portal_name: updatedItem.portal_name ?? null,
+    };
+  }
+
+  syncPortalFavoritesFromItem(updatedItem);
+}
+
+function syncPortalFavoritesFromItem(updatedItem) {
+  if (!updatedItem?.id) return;
+
+  const favorites = loadPortalFavorites();
+  let changed = false;
+  const nextFavorites = favorites.map((favorite) => {
+    if (favorite.id !== updatedItem.id) return favorite;
+    changed = true;
+    return {
+      ...favorite,
+      id: updatedItem.id,
+      latitude: updatedItem.latitude,
+      longitude: updatedItem.longitude,
+      portal_name: updatedItem.portal_name ?? favorite.portal_name ?? null,
+    };
+  });
+
+  if (changed) {
+    savePortalFavorites(nextFavorites);
+  }
+}
+
+function getLinkedPortalItems() {
+  const linked = [];
+
+  if (state.selectedLocalPortalId && state.selectedLocalPortalPos) {
+    linked.push({
+      id: state.selectedLocalPortalId,
+      type: "portal_marker",
+      latitude: state.selectedLocalPortalPos.latitude,
+      longitude: state.selectedLocalPortalPos.longitude,
+      portal_name: state.selectedLocalPortalPos.portal_name ?? null,
+    });
+  }
+
+  if (state.selectedRemotePortalId && state.selectedRemotePortalPos) {
+    linked.push({
+      id: state.selectedRemotePortalId,
+      type: "portal_marker",
+      latitude: state.selectedRemotePortalPos.latitude,
+      longitude: state.selectedRemotePortalPos.longitude,
+      portal_name: state.selectedRemotePortalPos.portal_name ?? null,
+    });
+  }
+
+  return linked;
+}
+
+function mergeDisplayItems(nearbyItems, viewportPortalItems, linkedPortalItems = []) {
   const merged = new Map();
   for (const item of nearbyItems) {
     merged.set(item.id, item);
   }
   for (const item of viewportPortalItems) {
+    merged.set(item.id, item);
+  }
+  for (const item of linkedPortalItems) {
     merged.set(item.id, item);
   }
   return Array.from(merged.values());
@@ -1177,9 +1493,19 @@ function setRemotePortal(item) {
   }
 
   state.selectedLocalPortalId = localPortal.id;
-  state.selectedLocalPortalPos = { latitude: localPortal.latitude, longitude: localPortal.longitude };
+  state.selectedLocalPortalPos = {
+    id: localPortal.id,
+    latitude: localPortal.latitude,
+    longitude: localPortal.longitude,
+    portal_name: localPortal.portal_name ?? null,
+  };
   state.selectedRemotePortalId = item.id;
-  state.selectedRemotePortalPos = { latitude: item.latitude, longitude: item.longitude };
+  state.selectedRemotePortalPos = {
+    id: item.id,
+    latitude: item.latitude,
+    longitude: item.longitude,
+    portal_name: item.portal_name ?? null,
+  };
   savePortalSession();
   renderPortalSelection();
   updatePortalHud();
@@ -1250,7 +1576,11 @@ function renderPortalSelection() {
   }
 
   if (portalSelectionEl) {
-    portalSelectionEl.textContent = `Local: ${state.selectedLocalPortalId || "-"} | Remote: ${state.selectedRemotePortalId || "-"}`;
+    const local = state.displayItems.find((item) => item.id === state.selectedLocalPortalId) || state.selectedLocalPortalPos;
+    const remote = state.displayItems.find((item) => item.id === state.selectedRemotePortalId) || state.selectedRemotePortalPos;
+    const localLabel = local ? formatPortalLabel(local) : (state.selectedLocalPortalId || "-");
+    const remoteLabel = remote ? formatPortalLabel(remote) : (state.selectedRemotePortalId || "-");
+    portalSelectionEl.textContent = `Local: ${localLabel} | Remote: ${remoteLabel}`;
   }
   updatePortalHud();
 }
@@ -1272,12 +1602,15 @@ function addNearestPortalToFavorites() {
     id: nearest.portal.id,
     latitude: nearest.portal.latitude,
     longitude: nearest.portal.longitude,
+    portal_name: nearest.portal.portal_name ?? null,
   });
   savePortalFavorites(favorites);
   notify("Portal added to favourites.", "success", 2200);
 }
 
 function renderPortalModal() {
+  renderNearbyPortalList();
+
   const addHereButton = document.getElementById("portal-add-here");
   const addFavoriteButton = document.getElementById("portal-add-favorite");
   const useButton = document.getElementById("portal-use-link");
@@ -1305,7 +1638,7 @@ function renderPortalModal() {
 
   for (const favorite of favorites) {
     const li = document.createElement("li");
-    li.innerHTML = `<strong>${favorite.id.slice(0, 8)}...</strong><br /><small>${favorite.latitude.toFixed(6)}, ${favorite.longitude.toFixed(6)}</small>`;
+    li.innerHTML = `<strong>${escapeHtml(formatPortalLabel(favorite))}</strong><br /><small>${favorite.latitude.toFixed(6)}, ${favorite.longitude.toFixed(6)}</small>`;
 
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
@@ -1318,6 +1651,7 @@ function renderPortalModal() {
         type: "portal_marker",
         latitude: favorite.latitude,
         longitude: favorite.longitude,
+        portal_name: favorite.portal_name ?? null,
       });
       renderPortalModal();
     });
@@ -1336,11 +1670,89 @@ function renderPortalModal() {
   }
 }
 
+function renderNearbyPortalList() {
+  if (!portalNearbyListEl) return;
+
+  portalNearbyListEl.innerHTML = "";
+  const nearby = getPhysicalNearbyPortals(PICKUP_RANGE_METERS) || [];
+
+  if (!nearby.length) {
+    const empty = document.createElement("li");
+    empty.textContent = "No nearby portals to name.";
+    portalNearbyListEl.appendChild(empty);
+    return;
+  }
+
+  for (const entry of nearby) {
+    const { portal, distance } = entry;
+    const li = document.createElement("li");
+    li.className = "portal-nearby-item";
+
+    const summary = document.createElement("div");
+    summary.innerHTML = `<strong>${escapeHtml(formatPortalLabel(portal))}</strong><br /><small>${distance.toFixed(1)}m away • ${escapeHtml(portal.id.slice(0, 8))}...</small>`;
+    li.appendChild(summary);
+
+    const actions = document.createElement("div");
+    actions.className = "portal-nearby-actions";
+
+    const renameButton = document.createElement("button");
+    renameButton.textContent = "Rename";
+    renameButton.addEventListener("click", () => renamePortal(portal));
+    actions.appendChild(renameButton);
+
+    const selectButton = document.createElement("button");
+    selectButton.textContent = "Use As Remote";
+    selectButton.addEventListener("click", () => {
+      setRemotePortal(portal);
+      renderPortalModal();
+    });
+    actions.appendChild(selectButton);
+
+    li.appendChild(actions);
+    portalNearbyListEl.appendChild(li);
+  }
+}
+
+async function renamePortal(portal) {
+  if (!portal || portal.type !== "portal_marker") return;
+  if (!state.physicalPosition) return;
+
+  const portalName = getPortalNameInputValue();
+  if (!portalName) {
+    notify("Enter a portal name first.", "error");
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${portal.id}/portal-name`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor_latitude: state.physicalPosition.lat,
+        actor_longitude: state.physicalPosition.lng,
+        portal_name: portalName,
+      }),
+    });
+
+    if (!response.ok) throw new Error(await response.text());
+    const updated = await response.json();
+    updatePortalItemsInState(updated);
+    renderMapItems();
+    drawPortalLink();
+    renderPortalModal();
+    notify("Portal renamed.", "success", 2200);
+  } catch (err) {
+    console.error(err);
+    notify("Failed to rename portal.", "error");
+  }
+}
+
 function renderDebugModal() {
   const spoofHereButton = document.getElementById("debug-spoof-here");
   const useRealButton = document.getElementById("debug-use-real");
   if (spoofHereButton) spoofHereButton.disabled = state.gpsMode === "spoof";
   if (useRealButton) useRealButton.disabled = state.gpsMode === "real";
+  syncSpoofAccuracyInput();
 }
 
 function savePortalSession() {
@@ -1351,6 +1763,7 @@ function loadPortalSession() {
   if (!state.selectedLocalPortalId && !state.selectedRemotePortalId) return;
   updatePortalOffsetFromSelection();
   renderPortalSelection();
+  updateTopOverlayButtons();
 }
 
 function renderNearbyItemList() {
@@ -1415,6 +1828,8 @@ function renderItemList(items) {
 }
 
 async function loadNearby(lat, lng, preferCache = true) {
+  if (!state.dimensionRootId) return;
+
   const maxRangeMeters = PICKUP_RANGE_METERS;
   const nearbyKey = `${state.dimensionRootId}:nearby:${lat.toFixed(4)}:${lng.toFixed(4)}:${maxRangeMeters}`;
 
@@ -1422,9 +1837,14 @@ async function loadNearby(lat, lng, preferCache = true) {
     const cached = cacheRead(nearbyKey);
     if (cached) {
       state.nearbyItems = cached.items || [];
-      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems);
+      for (const item of state.nearbyItems) {
+        if (item.type === "portal_marker") updatePortalItemsInState(item);
+      }
+      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
       renderMapItems();
       renderNearbyItemList();
+      renderPortalSelection();
+      updatePortalHud();
       drawPortalLink();
       return;
     }
@@ -1478,18 +1898,28 @@ async function loadNearby(lat, lng, preferCache = true) {
     cacheWrite(nearbyKey, { items: nearbyItems });
 
     state.nearbyItems = nearbyItems;
-    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems);
+    for (const item of state.nearbyItems) {
+      if (item.type === "portal_marker") updatePortalItemsInState(item);
+    }
+    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
     renderMapItems();
     renderNearbyItemList();
+    renderPortalSelection();
+    updatePortalHud();
     drawPortalLink();
   } catch (err) {
     console.error("Failed to load nearby items", err);
     const cached = cacheRead(nearbyKey);
     if (cached) {
       state.nearbyItems = cached.items || [];
-      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems);
+      for (const item of state.nearbyItems) {
+        if (item.type === "portal_marker") updatePortalItemsInState(item);
+      }
+      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
       renderMapItems();
       renderNearbyItemList();
+      renderPortalSelection();
+      updatePortalHud();
       drawPortalLink();
     }
   }
@@ -1500,15 +1930,42 @@ async function loadViewportPortals(preferCache = true) {
 
   const bounds = state.map.getBounds();
   const key = `${state.dimensionRootId}:bbox:${bounds.getSouth().toFixed(3)}:${bounds.getWest().toFixed(3)}:${bounds.getNorth().toFixed(3)}:${bounds.getEast().toFixed(3)}`;
-  if (preferCache) {
-    const cached = cacheRead(key);
+  const zoom = state.map.getZoom();
+
+  if (zoom < PORTAL_VIEWPORT_FETCH_ZOOM) {
+    const cached = cachePeekEntry(key)?.value;
+    state.viewportPortalItems = cached?.items || [];
     if (cached) {
-      state.viewportPortalItems = cached.items;
-      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems);
-      renderMapItems();
-      drawPortalLink();
-      return;
+      cacheTouch(key);
     }
+    for (const item of state.viewportPortalItems) {
+      updatePortalItemsInState(item);
+    }
+    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
+    renderMapItems();
+    renderPortalSelection();
+    updatePortalHud();
+    drawPortalLink();
+    return;
+  }
+
+  const cachedEntry = cachePeekEntry(key);
+  const cached = cachedEntry?.value || null;
+  const cacheAgeMs = cachedEntry ? getCacheAgeMs(key) : null;
+  const cacheIsFresh = cached && cacheAgeMs !== null && cacheAgeMs <= PORTAL_CACHE_TTL_MS;
+
+  if (cacheIsFresh) {
+    state.viewportPortalItems = cached.items || [];
+    cacheTouch(key);
+    for (const item of state.viewportPortalItems) {
+      updatePortalItemsInState(item);
+    }
+    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
+    renderMapItems();
+    renderPortalSelection();
+    updatePortalHud();
+    drawPortalLink();
+    return;
   }
 
   const query = new URLSearchParams({
@@ -1525,22 +1982,39 @@ async function loadViewportPortals(preferCache = true) {
     const payload = await response.json();
     state.viewportPortalItems = payload.items || [];
     cacheWrite(key, payload);
-    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems);
+    for (const item of state.viewportPortalItems) {
+      updatePortalItemsInState(item);
+    }
+    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
     renderMapItems();
+    renderPortalSelection();
+    updatePortalHud();
     drawPortalLink();
   } catch {
-    const cached = cacheRead(key);
-    if (cached) {
-      state.viewportPortalItems = cached.items || [];
-      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems);
+    const fallbackCached = cachePeekEntry(key)?.value || cachedEntry?.value || null;
+    if (fallbackCached) {
+      state.viewportPortalItems = fallbackCached.items || [];
+      cacheTouch(key);
+      for (const item of state.viewportPortalItems) {
+        updatePortalItemsInState(item);
+      }
+      state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
       renderMapItems();
+      renderPortalSelection();
+      updatePortalHud();
       drawPortalLink();
     }
   }
 }
 
-function updatePosition(lat, lng, accuracy) {
+function updatePosition(lat, lng, accuracy, heading = null, speed = null) {
   state.lastRealPosition = { lat, lng, accuracy };
+  if (Number.isFinite(heading)) {
+    const sampleSpeed = Number.isFinite(speed) ? speed : null;
+    if (sampleSpeed === null || sampleSpeed >= 0.5) {
+      state.currentHeading = smoothHeading(state.currentHeading, heading);
+    }
+  }
   if (state.gpsMode === "spoof") {
     schedulePersistClientState();
     return;
@@ -1550,6 +2024,7 @@ function updatePosition(lat, lng, accuracy) {
   refreshGpsSpooferStatus();
   refreshLocationAndNearby(true);
   restoreFollowOnNextFrame();
+  applyMapRotation();
 }
 
 function beginGeolocation() {
@@ -1577,7 +2052,7 @@ function beginGeolocation() {
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       clearFirstFixTimeout();
-      updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+      updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, pos.coords.heading, pos.coords.speed);
     },
     (err) => {
       locationStatusEl.textContent = `Location error: ${explainGeoError(err)}`;
@@ -1588,7 +2063,7 @@ function beginGeolocation() {
   geolocationWatchId = navigator.geolocation.watchPosition(
     (pos) => {
       clearFirstFixTimeout();
-      updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+      updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, pos.coords.heading, pos.coords.speed);
     },
     (err) => {
       locationStatusEl.textContent = `Location error: ${explainGeoError(err)}`;
@@ -1599,17 +2074,9 @@ function beginGeolocation() {
 
 async function placePortal() {
   if (!state.physicalPosition) return;
+  const portalName = getPortalNameInputValue();
 
-  const tooClose = state.displayItems.some((item) => {
-    if (item.type !== "portal_marker") return false;
-    const d = haversineMeters(
-      state.physicalPosition.lat,
-      state.physicalPosition.lng,
-      item.latitude,
-      item.longitude
-    );
-    return d < MIN_PORTAL_SPACING_METERS;
-  });
+  const tooClose = (getPhysicalNearbyPortals(MIN_PORTAL_SPACING_METERS) || []).length > 0;
 
   if (tooClose) {
     notify(`Portal too close to an existing portal. Keep at least ${MIN_PORTAL_SPACING_METERS}m spacing.`, "error");
@@ -1621,22 +2088,49 @@ async function placePortal() {
     owner: state.ownerId,
     latitude: state.physicalPosition.lat,
     longitude: state.physicalPosition.lng,
-    accuracy_meters: state.physicalPosition.accuracy,
+    accuracy_meters: getPlacementAccuracyMeters(),
   };
+  if (portalName) {
+    body.portal_name = portalName;
+  }
 
   const url = `/api/dimensions/${state.dimensionRootId}/items`;
 
   try {
     if (!navigator.onLine) throw new Error("offline");
-    await sendJson(url, body);
-  } catch {
-    queueWrite({ kind: "json", url, body });
+    const created = await sendJson(url, body);
+    updatePortalItemsInState(created);
+  } catch (err) {
+    const message = parseErrorMessage(err);
+    if (message) {
+      const timeoutMs = /accuracy/i.test(message) ? 5000 : 2600;
+      notify(message, "error", timeoutMs);
+    }
+    if (/^offline$/i.test(message) || /fetch/i.test(message)) {
+      queueWrite({ kind: "json", url, body });
+    }
+    return;
   }
 
   await replayQueue();
   const virtual = getVirtualPosition();
   if (virtual) {
     await loadNearby(virtual.lat, virtual.lng, false);
+  }
+  renderPortalModal();
+}
+
+function getPortalNameInputValue() {
+  return portalNameInputEl ? portalNameInputEl.value.trim() : "";
+}
+
+function parseErrorMessage(err) {
+  const raw = err instanceof Error ? err.message : String(err || "");
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.detail || raw;
+  } catch {
+    return raw;
   }
 }
 
@@ -1691,6 +2185,14 @@ followToggleButtonEl?.addEventListener("click", () => {
   schedulePersistClientState();
   updateFollowIndicator();
   centerMapOnPlayerVirtual(true);
+});
+
+mapRotationToggleButtonEl?.addEventListener("click", () => {
+  toggleMapRotationMode();
+});
+
+portalReturnButtonEl?.addEventListener("click", () => {
+  returnToPhysicalPosition();
 });
 
 document.getElementById("action-open-items")?.addEventListener("click", () => {
@@ -1818,6 +2320,20 @@ document.getElementById("debug-walk-north")?.addEventListener("click", () => wal
 document.getElementById("debug-walk-east")?.addEventListener("click", () => walkSpoof(0, 1, "east"));
 document.getElementById("debug-walk-south")?.addEventListener("click", () => walkSpoof(-1, 0, "south"));
 document.getElementById("debug-walk-west")?.addEventListener("click", () => walkSpoof(0, -1, "west"));
+gpsAccuracyOverrideInputEl?.addEventListener("change", () => {
+  const rawValue = gpsAccuracyOverrideInputEl.value.trim();
+  if (!rawValue) {
+    setSpoofAccuracyOverrideMeters(null);
+    return;
+  }
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    notify("Spoof accuracy must be a non-negative number.", "error");
+    syncSpoofAccuracyInput();
+    return;
+  }
+  setSpoofAccuracyOverrideMeters(parsedValue);
+});
 
 menuToggleButtonEl?.addEventListener("click", () => {
   toggleDevMenu();
@@ -2092,7 +2608,7 @@ async function replayInventoryItem(item, editedText) {
       form.append("owner", state.ownerId);
       form.append("latitude", String(virtual.lat));
       form.append("longitude", String(virtual.lng));
-      form.append("accuracy_meters", String(state.physicalPosition.accuracy));
+      form.append("accuracy_meters", String(getPlacementAccuracyMeters()));
       form.append("content_text", finalText);
       form.append("file", dataUrlToFile(item.content_data_url, `${item.id}.png`, "image/png"));
       const response = await fetch(`/api/dimensions/${state.dimensionRootId}/photos`, {
@@ -2106,7 +2622,7 @@ async function replayInventoryItem(item, editedText) {
         owner: state.ownerId,
         latitude: virtual.lat,
         longitude: virtual.lng,
-        accuracy_meters: state.physicalPosition.accuracy,
+        accuracy_meters: getPlacementAccuracyMeters(),
         content_text: finalText || null,
         content_upload_path: item.content_upload_path,
       });
@@ -2116,7 +2632,7 @@ async function replayInventoryItem(item, editedText) {
         owner: state.ownerId,
         latitude: virtual.lat,
         longitude: virtual.lng,
-        accuracy_meters: state.physicalPosition.accuracy,
+        accuracy_meters: getPlacementAccuracyMeters(),
         content_text: finalText,
       });
     }
@@ -2241,7 +2757,7 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
         form.append("owner", state.ownerId);
         form.append("latitude", String(virtual.lat));
         form.append("longitude", String(virtual.lng));
-        form.append("accuracy_meters", String(state.physicalPosition.accuracy));
+        form.append("accuracy_meters", String(getPlacementAccuracyMeters()));
         form.append("content_text", text);
         form.append("file", photoFile);
         const response = await fetch(`/api/dimensions/${state.dimensionRootId}/photos`, {
@@ -2258,7 +2774,7 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
           owner: state.ownerId,
           latitude: virtual.lat,
           longitude: virtual.lng,
-          accuracy_meters: state.physicalPosition.accuracy,
+          accuracy_meters: getPlacementAccuracyMeters(),
           content_text: text,
         });
       }
@@ -2284,10 +2800,12 @@ async function boot() {
   initLocCInputs();
   refreshGpsSpooferStatus();
   initMap();
+  applyMapRotation();
   history.replaceState({ uiSessionId, uiStack: [] }, "", window.location.href);
   syncUiStack([]);
   updatePlayerMarkers();
   updateFollowIndicator();
+  updateTopOverlayButtons();
   updatePortalHud();
   renderInventory();
   await getDefaultDimension();
