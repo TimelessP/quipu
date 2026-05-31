@@ -1929,16 +1929,12 @@ function renderPortalModal() {
 
   const addHereButton = document.getElementById("portal-add-here");
   const addFavoriteButton = document.getElementById("portal-add-favorite");
-  const useButton = document.getElementById("portal-use-link");
-  const returnButton = document.getElementById("portal-return-physical");
   const clearButton = document.getElementById("portal-clear-link");
   const removeNearbyButton = document.getElementById("portal-remove-nearby");
 
   const shifted = isVirtualShiftActive();
   if (addHereButton) addHereButton.disabled = shifted;
   if (addFavoriteButton) addFavoriteButton.disabled = !getNearestPortalAtVirtualPosition(PICKUP_RANGE_METERS);
-  if (useButton) useButton.disabled = !canUseCurrentPortalLink();
-  if (returnButton) returnButton.disabled = !shifted;
   if (clearButton) clearButton.disabled = !canClearCurrentPortalLink();
   if (removeNearbyButton) removeNearbyButton.disabled = !(getPhysicalNearbyPortals(PORTAL_REMOVE_RANGE_METERS)?.length);
 
@@ -1993,20 +1989,6 @@ function renderPortalModal() {
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
 
-    const selectButton = document.createElement("button");
-    selectButton.textContent = "Use As Remote";
-    selectButton.addEventListener("click", () => {
-      setRemotePortal({
-        id: favorite.id,
-        type: "portal_marker",
-        latitude: favorite.latitude,
-        longitude: favorite.longitude,
-        portal_name: favorite.portal_name ?? null,
-      });
-      renderPortalModal();
-    });
-    actions.appendChild(selectButton);
-
     const removeButton = document.createElement("button");
       removeButton.textContent = "Remove Favourite";
     removeButton.addEventListener("click", () => {
@@ -2049,14 +2031,6 @@ function renderNearbyPortalList() {
     renameButton.textContent = "Rename";
     renameButton.addEventListener("click", () => renamePortal(portal));
     actions.appendChild(renameButton);
-
-    const selectButton = document.createElement("button");
-    selectButton.textContent = "Use As Remote";
-    selectButton.addEventListener("click", () => {
-      setRemotePortal(portal);
-      renderPortalModal();
-    });
-    actions.appendChild(selectButton);
 
     li.appendChild(actions);
     portalNearbyListEl.appendChild(li);
@@ -2691,20 +2665,6 @@ document.getElementById("portal-add-here")?.addEventListener("click", async () =
 
 document.getElementById("portal-add-favorite")?.addEventListener("click", () => {
   addNearestPortalToFavorites();
-  renderPortalModal();
-});
-
-document.getElementById("portal-use-link")?.addEventListener("click", () => {
-  if (!canUseCurrentPortalLink()) {
-    notify("Stand by the linked source portal to use this portal.", "error", 2800);
-    return;
-  }
-  jumpThroughPortalLink();
-  renderPortalModal();
-});
-
-document.getElementById("portal-return-physical")?.addEventListener("click", () => {
-  returnToPhysicalPosition();
   renderPortalModal();
 });
 
