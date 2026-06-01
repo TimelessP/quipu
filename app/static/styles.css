@@ -284,8 +284,8 @@ h2 {
 }
 
 .icon-svg {
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 1.7rem;
+  height: 1.7rem;
 }
 
 .icon-svg--stroke {
@@ -326,8 +326,6 @@ h2 {
 
 .icon-svg--compass {
   overflow: visible;
-  width: 1.7rem;
-  height: 1.7rem;
 }
 
 .icon-svg--compass .icon-part {
