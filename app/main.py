@@ -222,6 +222,7 @@ async def update_portal_details(
     portal_name: str | None = Form(default=None),
     content_text: str | None = Form(default=None),
     content_url: HttpUrl | None = Form(default=None),
+    content_url_clear: bool = Form(default=False),
     file: UploadFile | None = File(default=None),
 ) -> dict:
     item = storage.get_item(item_id)
@@ -244,7 +245,7 @@ async def update_portal_details(
 
     has_portal_name = portal_name is not None and portal_name.strip() != ""
     has_content_text = content_text is not None and content_text.strip() != ""
-    has_content_url = content_url is not None
+    has_content_url = content_url is not None or content_url_clear
     has_file = file is not None
 
     if not (has_portal_name or has_content_text or has_content_url or has_file):
@@ -257,7 +258,9 @@ async def update_portal_details(
         item.portal_name = portal_name.strip()
     if content_text is not None:
         item.content_text = content_text.strip() if content_text.strip() else None
-    if content_url is not None:
+    if content_url_clear:
+        item.content_url = None
+    elif content_url is not None:
         item.content_url = content_url
 
     if file is not None:

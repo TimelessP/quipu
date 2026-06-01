@@ -109,6 +109,10 @@ const portalNameInputEl = document.getElementById("portal-name-input");
 const portalContentTextEl = document.getElementById("portal-content-text");
 const portalContentUrlEl = document.getElementById("portal-content-url");
 const portalContentImageEl = document.getElementById("portal-content-image");
+const portalEditorTargetEl = document.getElementById("portal-editor-target");
+const portalLoadNearestButtonEl = document.getElementById("portal-load-nearest");
+const portalContentUrlPreviewEl = document.getElementById("portal-content-url-preview");
+const portalContentImagePreviewEl = document.getElementById("portal-content-image-preview");
 const portalNearbyListEl = document.getElementById("portal-nearby-list");
 const gpsAccuracyOverrideInputEl = document.getElementById("gps-accuracy-override");
 
@@ -117,6 +121,8 @@ let noticeTimerId = null;
 let itemAddTarget = "location";
 let persistClientStateTimerId = null;
 let followRestoreFrameId = null;
+let portalEditorTargetId = null;
+let portalEditorBaseline = null;
 const uiSessionId = crypto.randomUUID();
 let uiStack = [];
 let syncingUiFromHistory = false;
@@ -845,6 +851,7 @@ function normalizePortalFavorite(favorite) {
     portal_name: typeof favorite?.portal_name === "string" && favorite.portal_name.trim() ? favorite.portal_name.trim() : null,
     content_text: normalizeOptionalText(favorite?.content_text),
     content_url: normalizeOptionalUrl(favorite?.content_url),
+    content_upload_path: typeof favorite?.content_upload_path === "string" && favorite.content_upload_path ? favorite.content_upload_path : null,
     content_data_url: typeof favorite?.content_data_url === "string" && favorite.content_data_url ? favorite.content_data_url : null,
   };
 }
@@ -886,7 +893,7 @@ function getInventoryEntries() {
     content_text: favorite.content_text ?? null,
     content_url: favorite.content_url ?? null,
     content_data_url: favorite.content_data_url ?? null,
-    content_upload_path: null,
+    content_upload_path: favorite.content_upload_path ?? null,
   }));
 
   const inventoryEntries = state.inventory.map((item) => ({
@@ -904,6 +911,19 @@ function getDisplayItemTypeLabel(item) {
   if (item.type === "photograph") return "Photograph";
   if (item.type === "letter") return "Letter";
   return item.type;
+}
+
+function getItemTypeBadgeInfo(item) {
+  if (item?.type === "favorite_portal_item") {
+    return { code: "FAV", label: "Favourite Portal", modifier: "item-type-badge--favorite" };
+  }
+  if (item?.type === "photograph") {
+    return { code: "PIC", label: "Photograph", modifier: "item-type-badge--photo" };
+  }
+  if (item?.type === "portal_marker") {
+    return { code: "PRT", label: "Portal", modifier: "item-type-badge--portal" };
+  }
+  return { code: "LTR", label: "Letter", modifier: "item-type-badge--letter" };
 }
 
 function getInventoryEntryTitle(item) {
@@ -1276,12 +1296,18 @@ function syncSelectedPortalSnapshots(local, remote) {
     latitude: local.latitude,
     longitude: local.longitude,
     portal_name: local.portal_name ?? null,
+    content_text: local.content_text ?? null,
+    content_url: local.content_url ?? null,
+    content_upload_path: local.content_upload_path ?? null,
   };
   state.selectedRemotePortalPos = {
     id: state.selectedRemotePortalId,
     latitude: remote.latitude,
     longitude: remote.longitude,
     portal_name: remote.portal_name ?? null,
+    content_text: remote.content_text ?? null,
+    content_url: remote.content_url ?? null,
+    content_upload_path: remote.content_upload_path ?? null,
   };
   savePortalSession();
 }
@@ -1842,6 +1868,9 @@ function updatePortalItemsInState(updatedItem) {
       latitude: updatedItem.latitude,
       longitude: updatedItem.longitude,
       portal_name: updatedItem.portal_name ?? null,
+      content_text: updatedItem.content_text ?? null,
+      content_url: updatedItem.content_url ?? null,
+      content_upload_path: updatedItem.content_upload_path ?? null,
     };
   }
   if (state.selectedRemotePortalId === updatedItem.id) {
@@ -1850,6 +1879,9 @@ function updatePortalItemsInState(updatedItem) {
       latitude: updatedItem.latitude,
       longitude: updatedItem.longitude,
       portal_name: updatedItem.portal_name ?? null,
+      content_text: updatedItem.content_text ?? null,
+      content_url: updatedItem.content_url ?? null,
+      content_upload_path: updatedItem.content_upload_path ?? null,
     };
   }
 
@@ -1953,6 +1985,9 @@ function getLinkedPortalItems() {
       latitude: state.selectedLocalPortalPos.latitude,
       longitude: state.selectedLocalPortalPos.longitude,
       portal_name: state.selectedLocalPortalPos.portal_name ?? null,
+      content_text: state.selectedLocalPortalPos.content_text ?? null,
+      content_url: state.selectedLocalPortalPos.content_url ?? null,
+      content_upload_path: state.selectedLocalPortalPos.content_upload_path ?? null,
     });
   }
 
@@ -1963,6 +1998,9 @@ function getLinkedPortalItems() {
       latitude: state.selectedRemotePortalPos.latitude,
       longitude: state.selectedRemotePortalPos.longitude,
       portal_name: state.selectedRemotePortalPos.portal_name ?? null,
+      content_text: state.selectedRemotePortalPos.content_text ?? null,
+      content_url: state.selectedRemotePortalPos.content_url ?? null,
+      content_upload_path: state.selectedRemotePortalPos.content_upload_path ?? null,
     });
   }
 
@@ -1975,9 +2013,39 @@ function mergeDisplayItems(nearbyItems, viewportPortalItems, linkedPortalItems =
     merged.set(item.id, item);
   }
   for (const item of viewportPortalItems) {
+    const existing = merged.get(item.id);
+    if (!existing) {
+      merged.set(item.id, item);
+      continue;
+    }
+    if (item.type === "portal_marker" && existing.type === "portal_marker") {
+      merged.set(item.id, {
+        ...existing,
+        ...item,
+        content_text: item.content_text ?? existing.content_text ?? null,
+        content_url: item.content_url ?? existing.content_url ?? null,
+        content_upload_path: item.content_upload_path ?? existing.content_upload_path ?? null,
+      });
+      continue;
+    }
     merged.set(item.id, item);
   }
   for (const item of linkedPortalItems) {
+    const existing = merged.get(item.id);
+    if (!existing) {
+      merged.set(item.id, item);
+      continue;
+    }
+    if (item.type === "portal_marker" && existing.type === "portal_marker") {
+      merged.set(item.id, {
+        ...existing,
+        ...item,
+        content_text: item.content_text ?? existing.content_text ?? null,
+        content_url: item.content_url ?? existing.content_url ?? null,
+        content_upload_path: item.content_upload_path ?? existing.content_upload_path ?? null,
+      });
+      continue;
+    }
     merged.set(item.id, item);
   }
   return Array.from(merged.values());
@@ -2146,9 +2214,79 @@ function addNearestPortalToFavorites() {
     latitude: nearest.portal.latitude,
     longitude: nearest.portal.longitude,
     portal_name: nearest.portal.portal_name ?? null,
+    content_text: nearest.portal.content_text ?? null,
+    content_url: nearest.portal.content_url ?? null,
+    content_upload_path: nearest.portal.content_upload_path ?? null,
   });
   savePortalFavorites(favorites);
   notify("Portal added to favourites.", "success", 2200);
+}
+
+function createPortalListSummary({
+  portalName,
+  portalId,
+  latitude,
+  longitude,
+  distanceMeters = null,
+  contentText = null,
+  contentUrl = null,
+  imageUrl = null,
+}) {
+  const summary = document.createElement("div");
+  summary.className = "portal-list-summary";
+
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "portal-list-thumb-wrap";
+
+  if (imageUrl) {
+    const thumb = document.createElement("img");
+    thumb.className = "portal-list-thumb";
+    thumb.alt = "Portal thumbnail";
+    thumb.src = imageUrl;
+    thumb.loading = "lazy";
+    thumbWrap.appendChild(thumb);
+  } else {
+    const placeholder = document.createElement("div");
+    placeholder.className = "portal-list-thumb portal-list-thumb-placeholder";
+    placeholder.textContent = "No image";
+    thumbWrap.appendChild(placeholder);
+  }
+
+  const body = document.createElement("div");
+  body.className = "portal-list-body";
+
+  const title = document.createElement("strong");
+  title.textContent = portalName || "Unnamed portal";
+  body.appendChild(title);
+
+  const meta = document.createElement("small");
+  const idPart = portalId ? `${portalId.slice(0, 8)}...` : "unknown";
+  const coordPart = Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
+    : "Unknown position";
+  const distancePart = Number.isFinite(distanceMeters) ? `${distanceMeters.toFixed(1)}m away` : null;
+  meta.textContent = distancePart ? `${distancePart} • ${coordPart} • ${idPart}` : `${coordPart} • ${idPart}`;
+  body.appendChild(meta);
+
+  if (typeof contentText === "string" && contentText.trim()) {
+    const text = document.createElement("p");
+    text.className = "portal-list-content-text";
+    text.textContent = contentText.trim();
+    body.appendChild(text);
+  }
+
+  if (typeof contentUrl === "string" && contentUrl.trim()) {
+    const link = document.createElement("a");
+    link.className = "portal-list-content-url";
+    link.href = contentUrl.trim();
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = contentUrl.trim();
+    body.appendChild(link);
+  }
+
+  summary.append(thumbWrap, body);
+  return summary;
 }
 
 function renderPortalModal() {
@@ -2165,6 +2303,15 @@ function renderPortalModal() {
   if (clearButton) clearButton.disabled = !canClearCurrentPortalLink();
   if (removeNearbyButton) removeNearbyButton.disabled = !(getPhysicalNearbyPortals(PORTAL_REMOVE_RANGE_METERS)?.length);
 
+  const targetPortal = getPortalEditorTargetPortal();
+  if (!targetPortal) {
+    setPortalEditorTarget(null);
+  } else if (!portalEditorBaseline || portalEditorBaseline.id !== targetPortal.id) {
+    setPortalEditorTarget(targetPortal, { prefill: true });
+  } else {
+    renderPortalEditorPreview(targetPortal);
+  }
+
   if (!portalFavoritesListEl) return;
   portalFavoritesListEl.innerHTML = "";
   const favorites = loadPortalFavorites();
@@ -2180,12 +2327,18 @@ function renderPortalModal() {
       latitude: livePortal.latitude,
       longitude: livePortal.longitude,
       portal_name: nextName,
+      content_text: livePortal.content_text ?? favorite.content_text ?? null,
+      content_url: livePortal.content_url ?? favorite.content_url ?? null,
+      content_upload_path: livePortal.content_upload_path ?? favorite.content_upload_path ?? null,
     };
 
     if (
       nextFavorite.latitude !== favorite.latitude ||
       nextFavorite.longitude !== favorite.longitude ||
-      nextFavorite.portal_name !== favorite.portal_name
+      nextFavorite.portal_name !== favorite.portal_name ||
+      nextFavorite.content_text !== favorite.content_text ||
+      nextFavorite.content_url !== favorite.content_url ||
+      nextFavorite.content_upload_path !== favorite.content_upload_path
     ) {
       favoritesChanged = true;
     }
@@ -2207,11 +2360,19 @@ function renderPortalModal() {
 
   for (const favorite of renderedFavorites) {
     const li = document.createElement("li");
+    li.className = "portal-favorite-item";
     const portalName = typeof favorite.portal_name === "string" && favorite.portal_name.trim()
       ? favorite.portal_name.trim()
       : "Unnamed portal";
-    const portalId = typeof favorite.id === "string" && favorite.id ? favorite.id.slice(0, 8) : "unknown";
-    li.innerHTML = `<strong>${escapeHtml(portalName)}</strong><br /><small>${favorite.latitude.toFixed(6)}, ${favorite.longitude.toFixed(6)} • ${escapeHtml(portalId)}...</small>`;
+    li.appendChild(createPortalListSummary({
+      portalName,
+      portalId: typeof favorite.id === "string" && favorite.id ? favorite.id : null,
+      latitude: Number(favorite.latitude),
+      longitude: Number(favorite.longitude),
+      contentText: favorite.content_text ?? null,
+      contentUrl: favorite.content_url ?? null,
+      imageUrl: favorite.content_upload_path ?? null,
+    }));
 
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
@@ -2259,17 +2420,34 @@ function renderNearbyPortalList() {
     const { portal, distance } = entry;
     const li = document.createElement("li");
     li.className = "portal-nearby-item";
-
-    const summary = document.createElement("div");
-    summary.innerHTML = `<strong>${escapeHtml(formatPortalLabel(portal))}</strong><br /><small>${distance.toFixed(1)}m away • ${escapeHtml(portal.id.slice(0, 8))}...</small>`;
-    li.appendChild(summary);
+    li.appendChild(createPortalListSummary({
+      portalName: formatPortalLabel(portal),
+      portalId: portal.id,
+      latitude: Number(portal.latitude),
+      longitude: Number(portal.longitude),
+      distanceMeters: distance,
+      contentText: portal.content_text ?? null,
+      contentUrl: portal.content_url ?? null,
+      imageUrl: portal.content_upload_path ?? null,
+    }));
 
     const actions = document.createElement("div");
     actions.className = "portal-nearby-actions";
 
+    const loadButton = document.createElement("button");
+    loadButton.textContent = "Load";
+    loadButton.addEventListener("click", () => {
+      setPortalEditorTarget(portal, { prefill: true });
+      notify("Loaded portal details into editor.", "info", 1800);
+    });
+    actions.appendChild(loadButton);
+
     const updateButton = document.createElement("button");
     updateButton.textContent = "Update";
-    updateButton.addEventListener("click", () => updatePortalDetails(portal));
+    updateButton.addEventListener("click", () => {
+      setPortalEditorTarget(portal, { prefill: false });
+      updatePortalDetails(portal);
+    });
     actions.appendChild(updateButton);
 
     actions.appendChild(createPortalShareButton(portal));
@@ -2280,37 +2458,74 @@ function renderNearbyPortalList() {
 }
 
 async function updatePortalDetails(portal) {
-  if (!portal || portal.type !== "portal_marker") return;
+  const targetPortal = portal && portal.type === "portal_marker" ? portal : getPortalEditorTargetPortal();
+  if (!targetPortal || targetPortal.type !== "portal_marker") {
+    notify("No nearby portal selected for update.", "error");
+    return;
+  }
+
   const actor = getEffectiveActorPosition();
   if (!actor) return;
 
-  const portalName = getPortalNameInputValue();
-  const portalText = normalizeOptionalText(portalContentTextEl?.value ?? null);
-  const portalUrl = normalizeOptionalUrl(portalContentUrlEl?.value ?? null);
+  const portalNameRaw = portalNameInputEl?.value?.trim?.() ?? "";
+  const portalTextRaw = portalContentTextEl?.value ?? "";
+  const portalUrlRaw = portalContentUrlEl?.value?.trim?.() ?? "";
   const portalImageFile = portalContentImageEl?.files?.[0] || null;
 
-  if (!portalName && !portalText && !portalUrl && !portalImageFile) {
-    notify("Enter at least one portal field to update.", "error");
+  const baseline = portalEditorBaseline && portalEditorBaseline.id === targetPortal.id
+    ? portalEditorBaseline
+    : {
+      id: targetPortal.id,
+      portal_name: targetPortal.portal_name || "",
+      content_text: targetPortal.content_text || "",
+      content_url: targetPortal.content_url || "",
+    };
+
+  const changedName = portalNameRaw !== baseline.portal_name;
+  const changedText = portalTextRaw !== baseline.content_text;
+  const changedUrl = portalUrlRaw !== baseline.content_url;
+
+  if (!changedName && !changedText && !changedUrl && !portalImageFile) {
+    notify("No portal changes to apply.", "info", 2200);
     return;
+  }
+
+  if (changedName && !portalNameRaw) {
+    notify("Portal name cannot be blank.", "error");
+    return;
+  }
+
+  if (portalUrlRaw) {
+    try {
+      // Basic URL validity guard before submit.
+      // eslint-disable-next-line no-new
+      new URL(portalUrlRaw);
+    } catch {
+      notify("Portal URL must be a valid absolute URL.", "error");
+      return;
+    }
   }
 
   try {
     const form = new FormData();
     form.append("actor_latitude", String(actor.lat));
     form.append("actor_longitude", String(actor.lng));
-    if (portalName) form.append("portal_name", portalName);
-    if (portalText) form.append("content_text", portalText);
-    if (portalUrl) form.append("content_url", portalUrl);
+    if (changedName) form.append("portal_name", portalNameRaw);
+    if (changedText) form.append("content_text", portalTextRaw);
+    if (changedUrl) {
+      if (portalUrlRaw) form.append("content_url", portalUrlRaw);
+      else form.append("content_url_clear", "true");
+    }
     if (portalImageFile) form.append("file", portalImageFile);
 
-    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${portal.id}/portal-details`, {
+    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${targetPortal.id}/portal-details`, {
       method: "PATCH",
       body: form,
     });
 
     if (!response.ok) {
       if (response.status === 404) {
-        reconcileMissingItem(portal.id);
+        reconcileMissingItem(targetPortal.id);
         notify("Portal no longer exists. Removed stale portal from your view.", "info", 2800);
         return;
       }
@@ -2318,8 +2533,9 @@ async function updatePortalDetails(portal) {
     }
     const updated = await response.json();
     if (portalContentImageEl) portalContentImageEl.value = "";
-    invalidatePortalCache(updated.id || portal.id);
+    invalidatePortalCache(updated.id || targetPortal.id);
     updatePortalItemsInState(updated);
+    setPortalEditorTarget(updated, { prefill: true });
     renderMapItems();
     drawPortalLink();
     renderPortalModal();
@@ -2419,6 +2635,7 @@ function renderItemList(items) {
 
     const li = document.createElement("li");
     li.className = "inventory-item";
+    const badgeInfo = getItemTypeBadgeInfo(item);
     const title = item.type === "favorite_portal_item"
       ? escapeHtml(item.favorite_portal_name || "Favourite Portal")
       : escapeHtml(getDisplayItemTypeLabel(item));
@@ -2433,7 +2650,11 @@ function renderItemList(items) {
       ? `${escapeHtml((item.favorite_portal_id || "unknown").slice(0, 8))}...`
       : escapeHtml(item.owner);
     li.innerHTML = `
-      <strong>${title}</strong> by ${metaLabel}${distLabel}<br />
+      <div class="item-title-row">
+        <span class="item-type-badge ${badgeInfo.modifier}" title="${escapeHtml(badgeInfo.label)}" aria-label="${escapeHtml(badgeInfo.label)}">${badgeInfo.code}</span>
+        <strong>${title}</strong>
+      </div>
+      by ${metaLabel}${distLabel}<br />
       <small class="item-meta">${new Date(item.placement_timestamp).toLocaleString()}</small>
       ${textPart}
       ${urlPart}
@@ -2837,6 +3058,86 @@ function getPortalNameInputValue() {
   return portalNameInputEl ? portalNameInputEl.value.trim() : "";
 }
 
+function getNearestPhysicalPortal() {
+  return getPhysicalNearbyPortals(PICKUP_RANGE_METERS)?.[0]?.portal || null;
+}
+
+function getPortalEditorTargetPortal() {
+  if (!portalEditorTargetId) return getNearestPhysicalPortal();
+  const nearby = getPhysicalNearbyPortals(PICKUP_RANGE_METERS) || [];
+  return nearby.find((entry) => entry.portal.id === portalEditorTargetId)?.portal || nearby[0]?.portal || null;
+}
+
+function renderPortalEditorPreview(portal) {
+  if (!portalEditorTargetEl) return;
+
+  if (!portal) {
+    portalEditorTargetEl.textContent = "Target: no nearby portal selected";
+    if (portalContentUrlPreviewEl) {
+      portalContentUrlPreviewEl.hidden = true;
+      portalContentUrlPreviewEl.href = "#";
+      portalContentUrlPreviewEl.textContent = "";
+    }
+    if (portalContentImagePreviewEl) {
+      portalContentImagePreviewEl.hidden = true;
+      portalContentImagePreviewEl.src = "";
+    }
+    return;
+  }
+
+  portalEditorTargetEl.textContent = `Target: ${formatPortalLabel(portal)} (${portal.id.slice(0, 8)}...)`;
+
+  if (portalContentUrlPreviewEl) {
+    const previewUrl = portal.content_url || "";
+    if (previewUrl) {
+      portalContentUrlPreviewEl.href = previewUrl;
+      portalContentUrlPreviewEl.textContent = previewUrl;
+      portalContentUrlPreviewEl.hidden = false;
+    } else {
+      portalContentUrlPreviewEl.hidden = true;
+      portalContentUrlPreviewEl.href = "#";
+      portalContentUrlPreviewEl.textContent = "";
+    }
+  }
+
+  if (portalContentImagePreviewEl) {
+    const previewImage = portal.content_upload_path || "";
+    if (previewImage) {
+      portalContentImagePreviewEl.src = previewImage;
+      portalContentImagePreviewEl.hidden = false;
+    } else {
+      portalContentImagePreviewEl.hidden = true;
+      portalContentImagePreviewEl.src = "";
+    }
+  }
+}
+
+function setPortalEditorTarget(portal, { prefill = true } = {}) {
+  if (!portal || portal.type !== "portal_marker") {
+    portalEditorTargetId = null;
+    portalEditorBaseline = null;
+    renderPortalEditorPreview(null);
+    return;
+  }
+
+  portalEditorTargetId = portal.id;
+  portalEditorBaseline = {
+    id: portal.id,
+    portal_name: portal.portal_name || "",
+    content_text: portal.content_text || "",
+    content_url: portal.content_url || "",
+  };
+
+  if (prefill) {
+    if (portalNameInputEl) portalNameInputEl.value = portalEditorBaseline.portal_name;
+    if (portalContentTextEl) portalContentTextEl.value = portalEditorBaseline.content_text;
+    if (portalContentUrlEl) portalContentUrlEl.value = portalEditorBaseline.content_url;
+    if (portalContentImageEl) portalContentImageEl.value = "";
+  }
+
+  renderPortalEditorPreview(portal);
+}
+
 function parseErrorMessage(err) {
   const raw = err instanceof Error ? err.message : String(err || "");
   try {
@@ -3083,6 +3384,28 @@ document.getElementById("portal-add-here")?.addEventListener("click", async () =
 document.getElementById("portal-add-favorite")?.addEventListener("click", () => {
   addNearestPortalToFavorites();
   renderPortalModal();
+});
+
+portalLoadNearestButtonEl?.addEventListener("click", () => {
+  const nearest = getNearestPhysicalPortal();
+  if (!nearest) {
+    notify("No nearby portal to load.", "error", 2200);
+    return;
+  }
+  setPortalEditorTarget(nearest, { prefill: true });
+  notify("Loaded nearest portal into editor.", "info", 1800);
+});
+
+portalContentImageEl?.addEventListener("change", () => {
+  const picked = portalContentImageEl.files?.[0] || null;
+  if (!portalContentImagePreviewEl) return;
+  if (!picked) {
+    const target = getPortalEditorTargetPortal();
+    renderPortalEditorPreview(target);
+    return;
+  }
+  portalContentImagePreviewEl.src = URL.createObjectURL(picked);
+  portalContentImagePreviewEl.hidden = false;
 });
 
 document.getElementById("portal-clear-link")?.addEventListener("click", () => {
@@ -3546,10 +3869,11 @@ function renderInventory() {
 
     const header = document.createElement("div");
     header.className = "inventory-meta";
+    const badgeInfo = getItemTypeBadgeInfo(item);
     const detail = item.inventorySource === "favorite"
       ? `<small>Local favourite • ${escapeHtml((item.portalId || "unknown").slice(0, 8))}...</small>`
       : `<small>Picked up ${new Date(item.placement_timestamp).toLocaleString()}</small>`;
-    header.innerHTML = `<strong>${escapeHtml(getInventoryEntryTitle(item))}</strong> — ${detail}`;
+    header.innerHTML = `<div class="item-title-row"><span class="item-type-badge ${badgeInfo.modifier}" title="${escapeHtml(badgeInfo.label)}" aria-label="${escapeHtml(badgeInfo.label)}">${badgeInfo.code}</span><strong>${escapeHtml(getInventoryEntryTitle(item))}</strong></div> — ${detail}`;
     li.appendChild(header);
 
     if (item.type === "favorite_portal_item") {

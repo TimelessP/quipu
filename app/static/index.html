@@ -105,14 +105,20 @@
           <button id="portals-modal-close" class="modal-close" type="button">Close</button>
         </div>
         <div class="portal-name-panel">
+          <div class="portal-editor-header">
+            <strong id="portal-editor-target">Target: no nearby portal selected</strong>
+            <button id="portal-load-nearest" type="button">Load Nearest</button>
+          </div>
           <label for="portal-name-input">Portal Name</label>
           <input id="portal-name-input" type="text" maxlength="80" placeholder="Name a portal near you" />
           <label for="portal-content-text">Portal Content Text</label>
           <textarea id="portal-content-text" rows="3" maxlength="5000" placeholder="Optional portal text"></textarea>
           <label for="portal-content-url">Portal Content URL</label>
           <input id="portal-content-url" type="url" maxlength="2048" placeholder="https://example.com" />
+          <a id="portal-content-url-preview" class="portal-editor-link" href="#" target="_blank" rel="noopener noreferrer" hidden></a>
           <label for="portal-content-image">Portal Image</label>
           <input id="portal-content-image" type="file" accept="image/*" />
+          <img id="portal-content-image-preview" class="portal-editor-image" alt="Portal image preview" hidden />
           <p class="portal-name-hint">Updates only work when you are physically near the portal.</p>
         </div>
         <div id="portal-link-summary" class="portal-link-summary">No linked portal.</div>
