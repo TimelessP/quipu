@@ -782,6 +782,15 @@ function savePortalFavorites(favorites) {
   localStorage.setItem(portalFavoritesKey, JSON.stringify(favorites.map((favorite) => normalizePortalFavorite(favorite))));
 }
 
+function removePortalFavoriteById(portalId) {
+  if (typeof portalId !== "string" || !portalId) return false;
+  const favorites = loadPortalFavorites();
+  const nextFavorites = favorites.filter((favorite) => favorite.id !== portalId);
+  if (nextFavorites.length === favorites.length) return false;
+  savePortalFavorites(nextFavorites);
+  return true;
+}
+
 function normalizePortalFavorite(favorite) {
   return {
     id: typeof favorite?.id === "string" ? favorite.id : null,
@@ -2063,7 +2072,7 @@ function renderPortalModal() {
     const removeButton = document.createElement("button");
     removeButton.textContent = "Remove Favourite";
     removeButton.addEventListener("click", () => {
-      savePortalFavorites(loadPortalFavorites().filter((f) => f.id !== favorite.id));
+      removePortalFavoriteById(favorite.id);
       renderPortalModal();
     });
     actions.appendChild(removeButton);
@@ -3154,6 +3163,8 @@ async function removePortalItem(item) {
   if (state.selectedLocalPortalId === item.id || state.selectedRemotePortalId === item.id) {
     clearPortalLink(false);
   }
+
+  removePortalFavoriteById(item.id);
 
   const virtual = getVirtualPosition();
   if (virtual) {
