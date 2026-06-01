@@ -34,6 +34,7 @@ const INVENTORY_TEXTAREA_MIN_ROWS = 4;
 const INVENTORY_TEXTAREA_MAX_ROWS = 12;
 const PORTAL_VIEWPORT_FETCH_ZOOM = 18;
 const PORTAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const WALK_SPEED_MPS = 1.4;
 const H3_RESOLUTION = 12;
 // Hard cap on viewport cell fan-out. At res 12 a zoom-18 mobile viewport is ~10-40 cells;
 // 200 is a comfortable ceiling that prevents accidental global queries.
@@ -1484,10 +1485,22 @@ function getCacheAgeMs(key) {
   return Date.now() - entry.touched;
 }
 
-async function fetchJsonWithCache(key, url, preferCache = true) {
+async function fetchJsonWithCache(key, url, preferCache = true, options = null) {
+  const maxAgeMs = Number.isFinite(options?.maxAgeMs) && options.maxAgeMs >= 0 ? options.maxAgeMs : null;
+
   if (preferCache) {
-    const cached = cacheRead(key);
-    if (cached) return cached;
+    if (maxAgeMs === null) {
+      const cached = cacheRead(key);
+      if (cached) return cached;
+    } else {
+      const cachedEntry = cachePeekEntry(key);
+      const cachedValue = cachedEntry?.value;
+      const cacheAgeMs = cachedEntry ? getCacheAgeMs(key) : null;
+      if (cachedValue && cacheAgeMs !== null && cacheAgeMs <= maxAgeMs) {
+        cacheTouch(key);
+        return cachedValue;
+      }
+    }
   }
   const response = await fetch(url);
   if (!response.ok) {
@@ -1499,6 +1512,21 @@ async function fetchJsonWithCache(key, url, preferCache = true) {
   const payload = await response.json();
   cacheWrite(key, payload);
   return payload;
+}
+
+function getDistanceAwareCellCacheTtlMs(cellId, originLat, originLng, h3Api) {
+  if (!Number.isFinite(originLat) || !Number.isFinite(originLng)) return PORTAL_CACHE_TTL_MS;
+  if (!h3Api || typeof h3Api.cellToLatLng !== "function") return PORTAL_CACHE_TTL_MS;
+
+  try {
+    const [cellLat, cellLng] = h3Api.cellToLatLng(cellId);
+    if (!Number.isFinite(cellLat) || !Number.isFinite(cellLng)) return PORTAL_CACHE_TTL_MS;
+    const distanceMeters = haversineMeters(originLat, originLng, cellLat, cellLng);
+    const walkTimeMs = Math.max(0, (distanceMeters / WALK_SPEED_MPS) * 1000);
+    return PORTAL_CACHE_TTL_MS + walkTimeMs;
+  } catch {
+    return PORTAL_CACHE_TTL_MS;
+  }
 }
 
 function queueWrite(payload) {
@@ -2299,7 +2327,8 @@ async function loadNearby(lat, lng, preferCache = true) {
       candidateCells.map((cellId) => {
         const key = `${state.dimensionRootId}:cell:${cellId}`;
         const url = `/api/dimensions/${state.dimensionRootId}/cells/${cellId}/item-ids`;
-        return fetchJsonWithCache(key, url, preferCache).catch(() => ({ item_ids: [] }));
+        const maxAgeMs = getDistanceAwareCellCacheTtlMs(cellId, lat, lng, h3Api);
+        return fetchJsonWithCache(key, url, preferCache, { maxAgeMs }).catch(() => ({ item_ids: [] }));
       })
     );
 
@@ -2421,6 +2450,7 @@ async function loadViewportPortals(preferCache = true) {
   const cached = cachedEntry?.value || null;
   const cacheAgeMs = cachedEntry ? getCacheAgeMs(viewportKey) : null;
   const cacheIsFresh = cached && cacheAgeMs !== null && cacheAgeMs <= PORTAL_CACHE_TTL_MS;
+  const cacheOrigin = getVirtualPosition() || state.physicalPosition || { lat: center.lat, lng: center.lng };
 
   if (cacheIsFresh) {
     state.viewportPortalItems = cached.items || [];
@@ -2440,7 +2470,8 @@ async function loadViewportPortals(preferCache = true) {
       cells.map((cellId) => {
         const cellKey = `${state.dimensionRootId}:cell:${cellId}`;
         const url = `/api/dimensions/${state.dimensionRootId}/cells/${cellId}/item-ids`;
-        return fetchJsonWithCache(cellKey, url, preferCache).catch(() => ({ item_ids: [] }));
+        const maxAgeMs = getDistanceAwareCellCacheTtlMs(cellId, cacheOrigin.lat, cacheOrigin.lng, h3Api);
+        return fetchJsonWithCache(cellKey, url, preferCache, { maxAgeMs }).catch(() => ({ item_ids: [] }));
       })
     );
 
