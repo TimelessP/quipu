@@ -2068,6 +2068,17 @@ function renderPortalModal() {
     });
     actions.appendChild(removeButton);
 
+    const viewButton = document.createElement("button");
+    viewButton.textContent = "View on Map";
+    viewButton.addEventListener("click", () => {
+      if (!state.map) return;
+      state.followPlayer = false;
+      updateFollowIndicator();
+      closeUiLayer("portals");
+      state.map.setView([favorite.latitude, favorite.longitude], Math.max(state.map.getZoom(), 16));
+    });
+    actions.appendChild(viewButton);
+
     actions.appendChild(createPortalShareButton(favorite));
 
     li.appendChild(actions);
