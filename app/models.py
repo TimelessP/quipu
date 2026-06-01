@@ -11,6 +11,7 @@ class ItemType(str, Enum):
     LETTER = "letter"
     PHOTOGRAPH = "photograph"
     PORTAL_MARKER = "portal_marker"
+    FAVORITE_PORTAL_ITEM = "favorite_portal_item"
 
 
 class ItemDocument(BaseModel):
@@ -22,6 +23,10 @@ class ItemDocument(BaseModel):
     longitude: float
     accuracy_meters: float | None = None
     portal_name: str | None = None
+    favorite_portal_id: str | None = None
+    favorite_portal_latitude: float | None = Field(default=None, ge=-90, le=90)
+    favorite_portal_longitude: float | None = Field(default=None, ge=-180, le=180)
+    favorite_portal_name: str | None = None
     content_text: str | None = None
     content_url: HttpUrl | None = None
     content_upload_path: str | None = None
@@ -29,13 +34,18 @@ class ItemDocument(BaseModel):
 
 
 class PlaceItemRequest(BaseModel):
-    type: Literal[ItemType.LETTER, ItemType.PORTAL_MARKER, ItemType.PHOTOGRAPH]
+    type: Literal[ItemType.LETTER, ItemType.PORTAL_MARKER, ItemType.PHOTOGRAPH, ItemType.FAVORITE_PORTAL_ITEM]
     owner: str = Field(min_length=1, max_length=128)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0)
     portal_name: str | None = Field(default=None, max_length=128)
     content_text: str | None = Field(default=None, max_length=5000)
+    content_url: HttpUrl | None = None
+    favorite_portal_id: str | None = Field(default=None, min_length=1, max_length=128)
+    favorite_portal_latitude: float | None = Field(default=None, ge=-90, le=90)
+    favorite_portal_longitude: float | None = Field(default=None, ge=-180, le=180)
+    favorite_portal_name: str | None = Field(default=None, max_length=128)
     # For re-placing a picked-up photograph: reference existing upload path
     content_upload_path: str | None = None
 
@@ -46,6 +56,11 @@ class PlacePhotoItemRequest(BaseModel):
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0)
     content_text: str | None = Field(default=None, max_length=5000)
+    content_url: HttpUrl | None = None
+    favorite_portal_id: str | None = Field(default=None, min_length=1, max_length=128)
+    favorite_portal_latitude: float | None = Field(default=None, ge=-90, le=90)
+    favorite_portal_longitude: float | None = Field(default=None, ge=-180, le=180)
+    favorite_portal_name: str | None = Field(default=None, max_length=128)
 
 
 class RenamePortalRequest(BaseModel):

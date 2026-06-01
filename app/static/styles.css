@@ -35,6 +35,7 @@
   --map-self: #050505;
   --map-anchor: #ff4d00;
   --map-portal: #ff2bd6;
+  --map-favorite: #244637;
   --map-photo: #ff8a00;
   --map-letter: #0073ff;
   --portal-line: #050505;
@@ -51,6 +52,9 @@
   --compass-core: #244637;
   --selection-bg: #0050b8;
   --selection-ink: #ffffff;
+  --link: #0050b8;
+  --link-hover: #003b88;
+  --link-visited: #5d2ea8;
 }
 
 :root[data-theme="dark"] {
@@ -90,6 +94,7 @@
   --map-self: #050505;
   --map-anchor: #ff4d00;
   --map-portal: #ff2bd6;
+  --map-favorite: #27f4ff;
   --map-photo: #ff8a00;
   --map-letter: #0073ff;
   --portal-line: #ff43d0;
@@ -106,6 +111,9 @@
   --compass-core: #102019;
   --selection-bg: #27f4ff;
   --selection-ink: #041014;
+  --link: #27f4ff;
+  --link-hover: #7ff9ff;
+  --link-visited: #ff7ae3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -146,6 +154,7 @@
     --map-self: #050505;
     --map-anchor: #ff4d00;
     --map-portal: #ff2bd6;
+    --map-favorite: #27f4ff;
     --map-photo: #ff8a00;
     --map-letter: #0073ff;
     --portal-line: #ff43d0;
@@ -162,6 +171,9 @@
     --compass-core: #102019;
     --selection-bg: #27f4ff;
     --selection-ink: #041014;
+    --link: #27f4ff;
+    --link-hover: #7ff9ff;
+    --link-visited: #ff7ae3;
   }
 }
 
@@ -177,6 +189,27 @@
 ::-moz-selection {
   background: var(--selection-bg);
   color: var(--selection-ink);
+}
+
+a {
+  color: var(--link);
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.16em;
+}
+
+a:visited {
+  color: var(--link-visited);
+}
+
+a:hover,
+a:focus {
+  color: var(--link-hover);
+}
+
+a:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  border-radius: 0.2rem;
 }
 
 input::selection,
@@ -406,7 +439,7 @@ h2 {
   top: calc(max(0.75rem, env(safe-area-inset-top)) + 3.55rem);
   left: 50%;
   transform: translate(-50%, -0.4rem);
-  z-index: 1120;
+  z-index: 1180;
   width: min(740px, calc(100% - 1.5rem));
   padding: 0.6rem 0.8rem;
   border: 1px solid var(--border);
@@ -602,6 +635,20 @@ h2 {
 
 .inventory-item .item-content-text {
   margin-top: 0;
+}
+
+.inventory-item .item-content-url,
+.inventory-item .inventory-preview-link,
+.inventory-item .inventory-favorite-meta {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.inventory-item .item-content-url a,
+.inventory-item .inventory-preview-link {
+  color: inherit;
 }
 
 .inventory-item .item-photo {
@@ -946,6 +993,12 @@ button:focus-visible {
 .inventory-item .inventory-textarea {
   width: 100%;
   resize: none;
+}
+
+.inventory-item .inventory-url-input,
+.inventory-item .inventory-image-input {
+  width: 100%;
+  margin-top: 0.45rem;
 }
 
 .inventory-actions {

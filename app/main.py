@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import HttpUrl
 
 from app import config
 from app.models import ItemDocument, ItemType, PlaceItemRequest, RenamePortalRequest
@@ -96,16 +97,22 @@ def place_item(root_id: str, request: PlaceItemRequest) -> dict:
     _validate_accuracy(request.accuracy_meters)
 
     portal_name = request.portal_name.strip() if request.portal_name else None
+    favorite_portal_name = request.favorite_portal_name.strip() if request.favorite_portal_name else None
 
-    if request.type == ItemType.LETTER and not request.content_text:
-        raise HTTPException(status_code=400, detail="content_text is required for letter items")
-    if request.type == ItemType.PORTAL_MARKER and request.content_text:
-        raise HTTPException(status_code=400, detail="portal_marker cannot include content_text")
+    if request.type == ItemType.LETTER and not request.content_text and not request.content_url:
+        raise HTTPException(status_code=400, detail="content_text or content_url is required for letter items")
+    if request.type == ItemType.PORTAL_MARKER and (request.content_text or request.content_url or request.content_upload_path):
+        raise HTTPException(status_code=400, detail="portal_marker cannot include content content")
     if request.type != ItemType.PORTAL_MARKER and request.portal_name:
         raise HTTPException(status_code=400, detail="portal_name is only allowed for portal markers")
-    if request.type == ItemType.PHOTOGRAPH:
-        if not request.content_upload_path:
-            raise HTTPException(status_code=400, detail="content_upload_path required for photograph placement")
+    if request.type == ItemType.FAVORITE_PORTAL_ITEM:
+        if not request.favorite_portal_id:
+            raise HTTPException(status_code=400, detail="favorite_portal_id is required for favorite portal items")
+        if request.favorite_portal_latitude is None or request.favorite_portal_longitude is None:
+            raise HTTPException(status_code=400, detail="favorite portal coordinates are required for favorite portal items")
+    if request.type == ItemType.PHOTOGRAPH and not request.content_upload_path:
+        raise HTTPException(status_code=400, detail="content_upload_path required for photograph placement")
+    if request.type in (ItemType.PHOTOGRAPH, ItemType.FAVORITE_PORTAL_ITEM) and request.content_upload_path:
         # Validate path is safe — must reference an existing upload, no traversal
         if not request.content_upload_path.startswith("/uploads/"):
             raise HTTPException(status_code=400, detail="Invalid upload path")
@@ -128,7 +135,12 @@ def place_item(root_id: str, request: PlaceItemRequest) -> dict:
         longitude=request.longitude,
         accuracy_meters=request.accuracy_meters,
         portal_name=portal_name if request.type == ItemType.PORTAL_MARKER else None,
+        favorite_portal_id=request.favorite_portal_id if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
+        favorite_portal_latitude=request.favorite_portal_latitude if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
+        favorite_portal_longitude=request.favorite_portal_longitude if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
+        favorite_portal_name=favorite_portal_name if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
         content_text=request.content_text,
+        content_url=request.content_url,
         content_upload_path=request.content_upload_path,
         dimension_root_id=root_id,
     )
@@ -201,6 +213,71 @@ def rename_portal(root_id: str, item_id: str, request: RenamePortalRequest) -> d
     return item.model_dump(mode="json")
 
 
+@app.patch("/api/dimensions/{root_id}/items/{item_id}/portal-details")
+async def update_portal_details(
+    root_id: str,
+    item_id: str,
+    actor_latitude: float = Form(...),
+    actor_longitude: float = Form(...),
+    portal_name: str | None = Form(default=None),
+    content_text: str | None = Form(default=None),
+    content_url: HttpUrl | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+) -> dict:
+    item = storage.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.dimension_root_id != root_id:
+        raise HTTPException(status_code=403, detail="Item does not belong to this dimension")
+    if item.type != ItemType.PORTAL_MARKER:
+        raise HTTPException(status_code=400, detail="Only portal markers can be updated from Portal modal")
+
+    distance = haversine_meters(actor_latitude, actor_longitude, item.latitude, item.longitude)
+    if distance > PORTAL_NAME_RANGE_METERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Portal updates require physical presence within {PORTAL_NAME_RANGE_METERS}m "
+                f"(current distance: {distance:.1f}m)."
+            ),
+        )
+
+    has_portal_name = portal_name is not None and portal_name.strip() != ""
+    has_content_text = content_text is not None and content_text.strip() != ""
+    has_content_url = content_url is not None
+    has_file = file is not None
+
+    if not (has_portal_name or has_content_text or has_content_url or has_file):
+        raise HTTPException(status_code=400, detail="Provide at least one portal field to update")
+
+    if portal_name is not None and portal_name.strip() == "":
+        raise HTTPException(status_code=400, detail="portal_name cannot be blank when provided")
+
+    if portal_name is not None and portal_name.strip() != "":
+        item.portal_name = portal_name.strip()
+    if content_text is not None:
+        item.content_text = content_text.strip() if content_text.strip() else None
+    if content_url is not None:
+        item.content_url = content_url
+
+    if file is not None:
+        suffix = Path(file.filename or "upload.bin").suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            content = await file.read()
+            tmp.write(content)
+
+        try:
+            upload_path = storage.save_upload(tmp_path, file.filename or "upload.bin")
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        item.content_upload_path = upload_path
+
+    storage.save_item(item)
+    return item.model_dump(mode="json")
+
+
 @app.post("/api/dimensions/{root_id}/photos")
 async def place_photo(
     root_id: str,
@@ -208,10 +285,24 @@ async def place_photo(
     latitude: float = Form(...),
     longitude: float = Form(...),
     accuracy_meters: float | None = Form(default=None),
+    item_type: ItemType = Form(default=ItemType.PHOTOGRAPH),
     content_text: str | None = Form(default=None),
+    content_url: HttpUrl | None = Form(default=None),
+    favorite_portal_id: str | None = Form(default=None),
+    favorite_portal_latitude: float | None = Form(default=None),
+    favorite_portal_longitude: float | None = Form(default=None),
+    favorite_portal_name: str | None = Form(default=None),
     file: UploadFile = File(...),
 ) -> dict:
     _validate_accuracy(accuracy_meters)
+
+    if item_type not in (ItemType.PHOTOGRAPH, ItemType.FAVORITE_PORTAL_ITEM):
+        raise HTTPException(status_code=400, detail="Multipart upload only supports photograph and favorite portal items")
+    if item_type == ItemType.FAVORITE_PORTAL_ITEM:
+        if not favorite_portal_id:
+            raise HTTPException(status_code=400, detail="favorite_portal_id is required for favorite portal items")
+        if favorite_portal_latitude is None or favorite_portal_longitude is None:
+            raise HTTPException(status_code=400, detail="favorite portal coordinates are required for favorite portal items")
 
     cell_id = h3.latlng_to_cell(latitude, longitude, config.H3_RESOLUTION)
 
@@ -229,12 +320,17 @@ async def place_photo(
 
     item = ItemDocument(
         id=str(uuid.uuid4()),
-        type=ItemType.PHOTOGRAPH,
+        type=item_type,
         owner=owner,
         latitude=latitude,
         longitude=longitude,
         accuracy_meters=accuracy_meters,
+        favorite_portal_id=favorite_portal_id if item_type == ItemType.FAVORITE_PORTAL_ITEM else None,
+        favorite_portal_latitude=favorite_portal_latitude if item_type == ItemType.FAVORITE_PORTAL_ITEM else None,
+        favorite_portal_longitude=favorite_portal_longitude if item_type == ItemType.FAVORITE_PORTAL_ITEM else None,
+        favorite_portal_name=favorite_portal_name.strip() if item_type == ItemType.FAVORITE_PORTAL_ITEM and favorite_portal_name else None,
         content_text=content_text,
+        content_url=content_url,
         content_upload_path=upload_path,
         dimension_root_id=root_id,
     )

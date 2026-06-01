@@ -35,6 +35,7 @@ const INVENTORY_TEXTAREA_MAX_ROWS = 12;
 const PORTAL_VIEWPORT_FETCH_ZOOM = 18;
 const PORTAL_CACHE_TTL_MS = 5 * 60 * 1000;
 const WALK_SPEED_MPS = 1.4;
+const PLACEMENT_ACCURACY_THRESHOLD_METERS = 50;
 const H3_RESOLUTION = 12;
 // Hard cap on viewport cell fan-out. At res 12 a zoom-18 mobile viewport is ~10-40 cells;
 // 200 is a comfortable ceiling that prevents accidental global queries.
@@ -48,7 +49,7 @@ const inventoryKey = "quipuInventoryV1";
 // Restore persisted inventory
 const _savedInventory = localStorage.getItem(inventoryKey);
 if (_savedInventory) {
-  try { state.inventory = JSON.parse(_savedInventory); } catch { state.inventory = []; }
+  try { state.inventory = JSON.parse(_savedInventory).map((item) => normalizeInventoryItem(item)); } catch { state.inventory = []; }
 }
 
 localStorage.setItem("quipuOwnerId", state.ownerId);
@@ -105,6 +106,9 @@ const aboutModalEl = document.getElementById("about-modal");
 const settingsThemeCycleButtonEl = document.getElementById("settings-theme-cycle");
 const settingsFollowPlayerButtonEl = document.getElementById("settings-follow-player");
 const portalNameInputEl = document.getElementById("portal-name-input");
+const portalContentTextEl = document.getElementById("portal-content-text");
+const portalContentUrlEl = document.getElementById("portal-content-url");
+const portalContentImageEl = document.getElementById("portal-content-image");
 const portalNearbyListEl = document.getElementById("portal-nearby-list");
 const gpsAccuracyOverrideInputEl = document.getElementById("gps-accuracy-override");
 
@@ -386,7 +390,18 @@ function getPlacementAccuracyMeters() {
   if (!state.physicalPosition) return null;
   const spoofAccuracy = getSpoofAccuracyMeters();
   if (spoofAccuracy !== null) return spoofAccuracy;
-  return state.physicalPosition.accuracy ?? null;
+
+  const reportedAccuracy = state.physicalPosition.accuracy ?? null;
+  if (!Number.isFinite(reportedAccuracy)) return null;
+
+  // Desktop browsers commonly provide coarse Wi-Fi geolocation that is good enough
+  // for user-directed placement but exceeds the strict mobile GPS threshold.
+  const isDesktopLike = !window.matchMedia("(pointer: coarse)").matches;
+  if (isDesktopLike && reportedAccuracy > PLACEMENT_ACCURACY_THRESHOLD_METERS) {
+    return PLACEMENT_ACCURACY_THRESHOLD_METERS;
+  }
+
+  return reportedAccuracy;
 }
 
 function setSpoofAccuracyOverrideMeters(value) {
@@ -783,6 +798,36 @@ function savePortalFavorites(favorites) {
   localStorage.setItem(portalFavoritesKey, JSON.stringify(favorites.map((favorite) => normalizePortalFavorite(favorite))));
 }
 
+function normalizeOptionalText(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeOptionalUrl(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeInventoryItem(item) {
+  const type = typeof item?.type === "string" ? item.type : "letter";
+  return {
+    id: typeof item?.id === "string" && item.id ? item.id : crypto.randomUUID(),
+    type,
+    owner: typeof item?.owner === "string" && item.owner ? item.owner : state.ownerId,
+    placement_timestamp: item?.placement_timestamp || new Date().toISOString(),
+    content_text: normalizeOptionalText(item?.content_text),
+    content_url: normalizeOptionalUrl(item?.content_url),
+    content_upload_path: typeof item?.content_upload_path === "string" && item.content_upload_path ? item.content_upload_path : null,
+    content_data_url: typeof item?.content_data_url === "string" && item.content_data_url ? item.content_data_url : null,
+    favorite_portal_id: typeof item?.favorite_portal_id === "string" && item.favorite_portal_id ? item.favorite_portal_id : null,
+    favorite_portal_latitude: Number.isFinite(item?.favorite_portal_latitude) ? Number(item.favorite_portal_latitude) : null,
+    favorite_portal_longitude: Number.isFinite(item?.favorite_portal_longitude) ? Number(item.favorite_portal_longitude) : null,
+    favorite_portal_name: normalizeOptionalText(item?.favorite_portal_name),
+  };
+}
+
 function removePortalFavoriteById(portalId) {
   if (typeof portalId !== "string" || !portalId) return false;
   const favorites = loadPortalFavorites();
@@ -798,7 +843,74 @@ function normalizePortalFavorite(favorite) {
     latitude: Number(favorite?.latitude),
     longitude: Number(favorite?.longitude),
     portal_name: typeof favorite?.portal_name === "string" && favorite.portal_name.trim() ? favorite.portal_name.trim() : null,
+    content_text: normalizeOptionalText(favorite?.content_text),
+    content_url: normalizeOptionalUrl(favorite?.content_url),
+    content_data_url: typeof favorite?.content_data_url === "string" && favorite.content_data_url ? favorite.content_data_url : null,
   };
+}
+
+function updatePortalFavorite(portalId, patch) {
+  if (typeof portalId !== "string" || !portalId) return;
+  const nextFavorites = loadPortalFavorites().map((favorite) => {
+    if (favorite.id !== portalId) return favorite;
+    return normalizePortalFavorite({ ...favorite, ...patch });
+  });
+  savePortalFavorites(nextFavorites);
+}
+
+function updateInventoryItem(itemId, patch) {
+  state.inventory = state.inventory.map((item) => {
+    if (item.id !== itemId) return item;
+    return normalizeInventoryItem({ ...item, ...patch });
+  });
+  saveInventory();
+}
+
+function inventoryHasFavoritePortal(portalId) {
+  if (typeof portalId !== "string" || !portalId) return false;
+  return loadPortalFavorites().some((favorite) => favorite.id === portalId);
+}
+
+function getInventoryEntries() {
+  const favoriteEntries = loadPortalFavorites().map((favorite) => ({
+    inventorySource: "favorite",
+    id: `favorite:${favorite.id}`,
+    portalId: favorite.id,
+    type: "favorite_portal_item",
+    owner: state.ownerId,
+    placement_timestamp: null,
+    favorite_portal_id: favorite.id,
+    favorite_portal_latitude: favorite.latitude,
+    favorite_portal_longitude: favorite.longitude,
+    favorite_portal_name: favorite.portal_name ?? null,
+    content_text: favorite.content_text ?? null,
+    content_url: favorite.content_url ?? null,
+    content_data_url: favorite.content_data_url ?? null,
+    content_upload_path: null,
+  }));
+
+  const inventoryEntries = state.inventory.map((item) => ({
+    ...normalizeInventoryItem(item),
+    inventorySource: "inventory",
+    portalId: item.favorite_portal_id ?? null,
+  }));
+
+  return [...favoriteEntries, ...inventoryEntries];
+}
+
+function getDisplayItemTypeLabel(item) {
+  if (item.type === "favorite_portal_item") return "Favourite Portal";
+  if (item.type === "portal_marker") return "Portal";
+  if (item.type === "photograph") return "Photograph";
+  if (item.type === "letter") return "Letter";
+  return item.type;
+}
+
+function getInventoryEntryTitle(item) {
+  if (item.type === "favorite_portal_item") {
+    return item.favorite_portal_name || item.portal_name || "Favourite Portal";
+  }
+  return getDisplayItemTypeLabel(item);
 }
 
 function getMapCenterOrPhysical() {
@@ -1320,6 +1432,7 @@ function getMapThemeColors() {
     range: getCssVar("--map-range", "#138c64"),
     anchor: getCssVar("--map-anchor", "#606975"),
     portal: getCssVar("--map-portal", "#6d3ef5"),
+    favorite: getCssVar("--map-favorite", getCssVar("--accent", "#0073ff")),
     photo: getCssVar("--map-photo", "#f38b2a"),
     letter: getCssVar("--map-letter", "#0e7a56"),
     portalLine: getCssVar("--portal-line", "#341a8d"),
@@ -1676,14 +1789,20 @@ function drawItems(items) {
 
   items.forEach((item) => {
     const color =
-      item.type === "portal_marker" ? theme.portal : item.type === "photograph" ? theme.photo : theme.letter;
+      item.type === "portal_marker"
+        ? theme.portal
+        : item.type === "favorite_portal_item"
+          ? theme.favorite
+          : item.type === "photograph"
+            ? theme.photo
+            : theme.letter;
 
     const marker = L.circleMarker([item.latitude, item.longitude], {
-      radius: item.type === "portal_marker" ? 12 : 8,
+      radius: item.type === "portal_marker" ? 12 : item.type === "favorite_portal_item" ? 10 : 8,
       color,
       fillColor: color,
-      fillOpacity: item.type === "portal_marker" ? 0.95 : 0.9,
-      weight: item.type === "portal_marker" ? 3 : 2,
+      fillOpacity: item.type === "portal_marker" ? 0.95 : item.type === "favorite_portal_item" ? 0.82 : 0.9,
+      weight: item.type === "portal_marker" ? 3 : item.type === "favorite_portal_item" ? 2.5 : 2,
     }).addTo(state.map);
 
     if (item.type === "portal_marker") {
@@ -2131,7 +2250,7 @@ function renderNearbyPortalList() {
 
   if (!nearby.length) {
     const empty = document.createElement("li");
-    empty.textContent = "No nearby portals to name.";
+    empty.textContent = "No nearby portals to update.";
     portalNearbyListEl.appendChild(empty);
     return;
   }
@@ -2148,10 +2267,10 @@ function renderNearbyPortalList() {
     const actions = document.createElement("div");
     actions.className = "portal-nearby-actions";
 
-    const renameButton = document.createElement("button");
-    renameButton.textContent = "Rename";
-    renameButton.addEventListener("click", () => renamePortal(portal));
-    actions.appendChild(renameButton);
+    const updateButton = document.createElement("button");
+    updateButton.textContent = "Update";
+    updateButton.addEventListener("click", () => updatePortalDetails(portal));
+    actions.appendChild(updateButton);
 
     actions.appendChild(createPortalShareButton(portal));
 
@@ -2160,26 +2279,33 @@ function renderNearbyPortalList() {
   }
 }
 
-async function renamePortal(portal) {
+async function updatePortalDetails(portal) {
   if (!portal || portal.type !== "portal_marker") return;
   const actor = getEffectiveActorPosition();
   if (!actor) return;
 
   const portalName = getPortalNameInputValue();
-  if (!portalName) {
-    notify("Enter a portal name first.", "error");
+  const portalText = normalizeOptionalText(portalContentTextEl?.value ?? null);
+  const portalUrl = normalizeOptionalUrl(portalContentUrlEl?.value ?? null);
+  const portalImageFile = portalContentImageEl?.files?.[0] || null;
+
+  if (!portalName && !portalText && !portalUrl && !portalImageFile) {
+    notify("Enter at least one portal field to update.", "error");
     return;
   }
 
   try {
-    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${portal.id}/portal-name`, {
+    const form = new FormData();
+    form.append("actor_latitude", String(actor.lat));
+    form.append("actor_longitude", String(actor.lng));
+    if (portalName) form.append("portal_name", portalName);
+    if (portalText) form.append("content_text", portalText);
+    if (portalUrl) form.append("content_url", portalUrl);
+    if (portalImageFile) form.append("file", portalImageFile);
+
+    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${portal.id}/portal-details`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        actor_latitude: actor.lat,
-        actor_longitude: actor.lng,
-        portal_name: portalName,
-      }),
+      body: form,
     });
 
     if (!response.ok) {
@@ -2191,15 +2317,16 @@ async function renamePortal(portal) {
       throw new Error(await response.text());
     }
     const updated = await response.json();
+    if (portalContentImageEl) portalContentImageEl.value = "";
     invalidatePortalCache(updated.id || portal.id);
     updatePortalItemsInState(updated);
     renderMapItems();
     drawPortalLink();
     renderPortalModal();
-    notify("Portal renamed.", "success", 2200);
+    notify("Portal updated.", "success", 2200);
   } catch (err) {
     console.error(err);
-    notify("Failed to rename portal.", "error");
+    notify(parseErrorMessage(err) || "Failed to update portal.", "error");
   }
 }
 
@@ -2227,6 +2354,50 @@ function renderNearbyItemList() {
   renderItemList(locationItems);
 }
 
+async function deleteWorldItemSilently(itemId) {
+  if (!itemId || !state.dimensionRootId) return false;
+  try {
+    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${itemId}`, { method: "DELETE" });
+    if (!response.ok) return false;
+  } catch {
+    return false;
+  }
+  invalidateItemCache(itemId);
+  removeItemFromClientState(itemId);
+  return true;
+}
+
+async function reconcileNearbyFavoritePortalItems(items, h3Api) {
+  const favoriteItems = items.filter(
+    (item) => item.type === "favorite_portal_item" && item.favorite_portal_id && Number.isFinite(item.favorite_portal_latitude) && Number.isFinite(item.favorite_portal_longitude)
+  );
+  if (!favoriteItems.length || !h3Api?.latLngToCell) return items;
+
+  const cellIds = Array.from(new Set(favoriteItems.map((item) => h3Api.latLngToCell(item.favorite_portal_latitude, item.favorite_portal_longitude, H3_RESOLUTION))));
+  const cellPayloads = await Promise.all(
+    cellIds.map(async (cellId) => {
+      const key = `${state.dimensionRootId}:cell:${cellId}`;
+      const url = `/api/dimensions/${state.dimensionRootId}/cells/${cellId}/item-ids`;
+      try {
+        const payload = await fetchJsonWithCache(key, url, false);
+        return [cellId, new Set(payload.item_ids || [])];
+      } catch {
+        return [cellId, new Set()];
+      }
+    })
+  );
+  const portalIdsByCell = new Map(cellPayloads);
+
+  const staleItems = favoriteItems.filter((item) => {
+    const cellId = h3Api.latLngToCell(item.favorite_portal_latitude, item.favorite_portal_longitude, H3_RESOLUTION);
+    return !portalIdsByCell.get(cellId)?.has(item.favorite_portal_id);
+  });
+  if (!staleItems.length) return items;
+
+  void Promise.all(staleItems.map((item) => deleteWorldItemSilently(item.id)));
+  return items.filter((item) => !staleItems.some((staleItem) => staleItem.id === item.id));
+}
+
 function renderItemList(items) {
   if (!itemsEl) return;
   itemsEl.innerHTML = "";
@@ -2243,18 +2414,29 @@ function renderItemList(items) {
       ? Math.round(haversineMeters(virtual.lat, virtual.lng, item.latitude, item.longitude))
       : null;
     const distLabel = dist !== null ? ` — ${dist}m away` : "";
-    const canPickUp = dist !== null && dist <= PICKUP_RANGE_METERS;
+    const alreadyFavorite = item.type === "favorite_portal_item" && inventoryHasFavoritePortal(item.favorite_portal_id);
+    const canPickUp = dist !== null && dist <= PICKUP_RANGE_METERS && !alreadyFavorite;
 
     const li = document.createElement("li");
     li.className = "inventory-item";
+    const title = item.type === "favorite_portal_item"
+      ? escapeHtml(item.favorite_portal_name || "Favourite Portal")
+      : escapeHtml(getDisplayItemTypeLabel(item));
     const textPart = item.content_text ? `<div class="item-content-text">${escapeHtml(item.content_text)}</div>` : "";
+    const urlPart = item.content_url
+      ? `<div class="item-content-url"><a href="${escapeHtml(item.content_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.content_url)}</a></div>`
+      : "";
     const photoPart = item.content_upload_path
       ? `<img class="item-photo" src="${item.content_upload_path}" alt="photo" />`
       : "";
+    const metaLabel = item.type === "favorite_portal_item"
+      ? `${escapeHtml((item.favorite_portal_id || "unknown").slice(0, 8))}...`
+      : escapeHtml(item.owner);
     li.innerHTML = `
-      <strong>${item.type}</strong> by ${escapeHtml(item.owner)}${distLabel}<br />
+      <strong>${title}</strong> by ${metaLabel}${distLabel}<br />
       <small class="item-meta">${new Date(item.placement_timestamp).toLocaleString()}</small>
       ${textPart}
+      ${urlPart}
       ${photoPart}
     `;
 
@@ -2267,7 +2449,11 @@ function renderItemList(items) {
     actions.className = "location-item-actions";
 
     const moveBtn = document.createElement("button");
-    moveBtn.textContent = canPickUp ? "Move To Inventory" : "Move Closer To Pick Up";
+    moveBtn.textContent = alreadyFavorite
+      ? "Already In Favourites"
+      : canPickUp
+        ? "Move To Inventory"
+        : "Move Closer To Pick Up";
     moveBtn.disabled = !canPickUp;
     moveBtn.addEventListener("click", () => pickUpItem(item));
     actions.appendChild(moveBtn);
@@ -2297,7 +2483,8 @@ async function loadNearby(lat, lng, preferCache = true) {
   if (preferCache) {
     const cached = cacheRead(nearbyKey);
     if (cached) {
-      state.nearbyItems = cached.items || [];
+      const h3Api = window.h3;
+      state.nearbyItems = await reconcileNearbyFavoritePortalItems(cached.items || [], h3Api);
       for (const item of state.nearbyItems) {
         if (item.type === "portal_marker") updatePortalItemsInState(item);
       }
@@ -2348,7 +2535,9 @@ async function loadNearby(lat, lng, preferCache = true) {
       )
     ).filter(Boolean);
 
-    const nearbyItems = items.filter(
+    const reconciledItems = await reconcileNearbyFavoritePortalItems(items, h3Api);
+
+    const nearbyItems = reconciledItems.filter(
       (item) => haversineMeters(lat, lng, item.latitude, item.longitude) <= maxRangeMeters
     );
     cacheWrite(nearbyKey, { items: nearbyItems });
@@ -3056,7 +3245,20 @@ settingsFollowPlayerButtonEl?.addEventListener("click", () => {
 // ── Inventory ─────────────────────────────────────────────────────────────────
 
 function saveInventory() {
-  localStorage.setItem(inventoryKey, JSON.stringify(state.inventory));
+  localStorage.setItem(inventoryKey, JSON.stringify(state.inventory.map((item) => normalizeInventoryItem(item))));
+}
+
+async function resolveItemImageDataUrl(item) {
+  if (item?.content_data_url) return item.content_data_url;
+  if (!item?.content_upload_path) return null;
+  try {
+    const response = await fetch(item.content_upload_path);
+    if (!response.ok) throw new Error("download failed");
+    const blob = await response.blob();
+    return await fileToDataUrl(blob);
+  } catch {
+    return null;
+  }
 }
 
 async function deleteLocationItem(item) {
@@ -3129,12 +3331,22 @@ function removeFromInventory(itemId) {
 }
 
 function deleteInventoryItem(item) {
-  removeFromInventory(item.id);
+  if (item.inventorySource === "favorite") {
+    removePortalFavoriteById(item.portalId);
+    renderPortalModal();
+  } else {
+    removeFromInventory(item.id);
+  }
   renderInventory();
   notify("Item deleted.", "success", 2000);
 }
 
 async function pickUpItem(item) {
+  if (item.type === "favorite_portal_item" && inventoryHasFavoritePortal(item.favorite_portal_id)) {
+    notify("This portal is already in your favourites.", "info", 2600);
+    return;
+  }
+
   try {
     const response = await fetch(
       `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
@@ -3148,8 +3360,25 @@ async function pickUpItem(item) {
     notify("Network error picking up item. Try again.", "error");
     return;
   }
-  state.inventory.push({ ...item });
-  saveInventory();
+
+  if (item.type === "favorite_portal_item") {
+    const favorites = loadPortalFavorites();
+    favorites.push({
+      id: item.favorite_portal_id,
+      latitude: item.favorite_portal_latitude,
+      longitude: item.favorite_portal_longitude,
+      portal_name: item.favorite_portal_name ?? null,
+      content_text: item.content_text ?? null,
+      content_url: item.content_url ?? null,
+      content_data_url: await resolveItemImageDataUrl(item),
+    });
+    savePortalFavorites(favorites);
+    renderPortalModal();
+  } else {
+    state.inventory.push(normalizeInventoryItem({ ...item }));
+    saveInventory();
+  }
+
   renderInventory();
   const virtual = getVirtualPosition();
   if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
@@ -3204,18 +3433,20 @@ async function removePortalItem(item) {
   notify("Portal removed.", "success", 2200);
 }
 
-async function replayInventoryItem(item, editedText) {
+async function replayInventoryItem(item, editedText, editedUrl) {
   const virtual = getVirtualPosition();
   if (!virtual || !state.physicalPosition) {
     notify("GPS position needed to place an item.", "error");
     return;
   }
 
-  const finalText = (editedText ?? item.content_text ?? "").trim();
+  const finalText = normalizeOptionalText(editedText ?? item.content_text);
+  const finalUrl = normalizeOptionalUrl(editedUrl ?? item.content_url);
   const hasImage = Boolean(item.content_upload_path || item.content_data_url);
+  const isFavoriteItem = item.type === "favorite_portal_item" && item.favorite_portal_id;
 
-  if (!finalText && !hasImage) {
-    notify("Item has no text or image.", "error");
+  if (!finalText && !finalUrl && !hasImage && !isFavoriteItem) {
+    notify("Item has no text, URL, or image.", "error");
     return;
   }
 
@@ -3232,7 +3463,15 @@ async function replayInventoryItem(item, editedText) {
       form.append("latitude", String(virtual.lat));
       form.append("longitude", String(virtual.lng));
       form.append("accuracy_meters", String(getPlacementAccuracyMeters()));
-      form.append("content_text", finalText);
+      form.append("item_type", isFavoriteItem ? "favorite_portal_item" : "photograph");
+      if (finalText) form.append("content_text", finalText);
+      if (finalUrl) form.append("content_url", finalUrl);
+      if (isFavoriteItem) {
+        form.append("favorite_portal_id", item.favorite_portal_id);
+        form.append("favorite_portal_latitude", String(item.favorite_portal_latitude));
+        form.append("favorite_portal_longitude", String(item.favorite_portal_longitude));
+        if (item.favorite_portal_name) form.append("favorite_portal_name", item.favorite_portal_name);
+      }
       form.append("file", dataUrlToFile(item.content_data_url, `${item.id}.png`, "image/png"));
       const response = await fetch(`/api/dimensions/${state.dimensionRootId}/photos`, {
         method: "POST",
@@ -3241,30 +3480,45 @@ async function replayInventoryItem(item, editedText) {
       if (!response.ok) throw new Error(await response.text());
     } else if (hasImage && item.content_upload_path) {
       await sendJson(`/api/dimensions/${state.dimensionRootId}/items`, {
-        type: "photograph",
-        owner: state.ownerId,
-        latitude: virtual.lat,
-        longitude: virtual.lng,
-        accuracy_meters: getPlacementAccuracyMeters(),
-        content_text: finalText || null,
-        content_upload_path: item.content_upload_path,
-      });
-    } else {
-      await sendJson(`/api/dimensions/${state.dimensionRootId}/items`, {
-        type: "letter",
+        type: isFavoriteItem ? "favorite_portal_item" : "photograph",
         owner: state.ownerId,
         latitude: virtual.lat,
         longitude: virtual.lng,
         accuracy_meters: getPlacementAccuracyMeters(),
         content_text: finalText,
+        content_url: finalUrl,
+        content_upload_path: item.content_upload_path,
+        favorite_portal_id: isFavoriteItem ? item.favorite_portal_id : null,
+        favorite_portal_latitude: isFavoriteItem ? item.favorite_portal_latitude : null,
+        favorite_portal_longitude: isFavoriteItem ? item.favorite_portal_longitude : null,
+        favorite_portal_name: isFavoriteItem ? item.favorite_portal_name : null,
+      });
+    } else {
+      await sendJson(`/api/dimensions/${state.dimensionRootId}/items`, {
+        type: isFavoriteItem ? "favorite_portal_item" : "letter",
+        owner: state.ownerId,
+        latitude: virtual.lat,
+        longitude: virtual.lng,
+        accuracy_meters: getPlacementAccuracyMeters(),
+        content_text: finalText,
+        content_url: finalUrl,
+        favorite_portal_id: isFavoriteItem ? item.favorite_portal_id : null,
+        favorite_portal_latitude: isFavoriteItem ? item.favorite_portal_latitude : null,
+        favorite_portal_longitude: isFavoriteItem ? item.favorite_portal_longitude : null,
+        favorite_portal_name: isFavoriteItem ? item.favorite_portal_name : null,
       });
     }
-  } catch {
-    notify("Could not place inventory item. Try again when online.", "error", 3200);
+  } catch (err) {
+    notify(parseErrorMessage(err) || "Could not place inventory item. Try again when online.", "error", 3200);
     return;
   }
 
-  removeFromInventory(item.id);
+  if (item.inventorySource === "favorite") {
+    removePortalFavoriteById(item.portalId);
+    renderPortalModal();
+  } else {
+    removeFromInventory(item.id);
+  }
   await replayQueue();
   const virtual2 = getVirtualPosition();
   if (virtual2) await loadNearby(virtual2.lat, virtual2.lng, false);
@@ -3275,42 +3529,78 @@ function renderInventory() {
   const inventoryEl = inventoryItemsListEl;
   const inventoryCountEl = null;
   if (!inventoryEl) return;
-  if (inventoryCountEl) inventoryCountEl.textContent = String(state.inventory.length);
+  const entries = getInventoryEntries();
+  if (inventoryCountEl) inventoryCountEl.textContent = String(entries.length);
 
   inventoryEl.innerHTML = "";
-  if (!state.inventory.length) {
+  if (!entries.length) {
     const empty = document.createElement("li");
     empty.textContent = "Nothing held.";
     inventoryEl.appendChild(empty);
     return;
   }
 
-  for (const item of state.inventory) {
+  for (const item of entries) {
     const li = document.createElement("li");
     li.className = "inventory-item";
 
     const header = document.createElement("div");
     header.className = "inventory-meta";
-    header.innerHTML = `<strong>${item.type}</strong> — picked up <small>${new Date(item.placement_timestamp).toLocaleString()}</small>`;
+    const detail = item.inventorySource === "favorite"
+      ? `<small>Local favourite • ${escapeHtml((item.portalId || "unknown").slice(0, 8))}...</small>`
+      : `<small>Picked up ${new Date(item.placement_timestamp).toLocaleString()}</small>`;
+    header.innerHTML = `<strong>${escapeHtml(getInventoryEntryTitle(item))}</strong> — ${detail}`;
     li.appendChild(header);
 
-    let textareaEl = null;
-    if (item.content_text) {
-      textareaEl = document.createElement("textarea");
-      textareaEl.className = "inventory-textarea";
-      textareaEl.rows = INVENTORY_TEXTAREA_MIN_ROWS;
-      textareaEl.value = item.content_text || "";
-      const applyBounds = () => autoResizeTextareaWithinRows(
-        textareaEl,
-        INVENTORY_TEXTAREA_MIN_ROWS,
-        INVENTORY_TEXTAREA_MAX_ROWS
-      );
-      textareaEl.addEventListener("input", applyBounds);
-      li.appendChild(textareaEl);
-      requestAnimationFrame(applyBounds);
+    if (item.type === "favorite_portal_item") {
+      const portalMeta = document.createElement("div");
+      portalMeta.className = "inventory-favorite-meta";
+      portalMeta.innerHTML = `<small>Portal ${escapeHtml((item.favorite_portal_name || item.portalId || "unknown"))}</small>`;
+      li.appendChild(portalMeta);
     }
 
-    if ((item.type === "photograph" && item.content_upload_path) || item.content_data_url) {
+    const textareaEl = document.createElement("textarea");
+    textareaEl.className = "inventory-textarea";
+    textareaEl.rows = INVENTORY_TEXTAREA_MIN_ROWS;
+    textareaEl.placeholder = item.type === "favorite_portal_item" ? "Optional note for this favourite portal" : "Optional note";
+    textareaEl.value = item.content_text || "";
+    const applyBounds = () => autoResizeTextareaWithinRows(
+      textareaEl,
+      INVENTORY_TEXTAREA_MIN_ROWS,
+      INVENTORY_TEXTAREA_MAX_ROWS
+    );
+    textareaEl.addEventListener("input", () => {
+      applyBounds();
+      const nextValue = textareaEl.value;
+      if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_text: nextValue });
+      else updateInventoryItem(item.id, { content_text: nextValue });
+    });
+    li.appendChild(textareaEl);
+    requestAnimationFrame(applyBounds);
+
+    const urlInputEl = document.createElement("input");
+    urlInputEl.type = "url";
+    urlInputEl.className = "inventory-url-input";
+    urlInputEl.placeholder = "Optional URL";
+    urlInputEl.value = item.content_url || "";
+    urlInputEl.addEventListener("input", () => {
+      const nextValue = urlInputEl.value;
+      if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_url: nextValue });
+      else updateInventoryItem(item.id, { content_url: nextValue });
+    });
+    li.appendChild(urlInputEl);
+
+    if (item.content_url) {
+      const link = document.createElement("a");
+      link.className = "inventory-preview-link";
+      link.href = item.content_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = item.content_url;
+      li.appendChild(link);
+    }
+
+    if (item.content_upload_path || item.content_data_url) {
       const img = document.createElement("img");
       img.src = item.content_upload_path || item.content_data_url;
       img.alt = "photo";
@@ -3321,13 +3611,39 @@ function renderInventory() {
       li.appendChild(img);
     }
 
+    const imageInputEl = document.createElement("input");
+    imageInputEl.type = "file";
+    imageInputEl.accept = "image/*";
+    imageInputEl.className = "inventory-image-input";
+    imageInputEl.addEventListener("change", async () => {
+      const file = imageInputEl.files?.[0] || null;
+      if (!file) return;
+      const dataUrl = await fileToDataUrl(file);
+      if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_data_url: dataUrl });
+      else updateInventoryItem(item.id, { content_data_url: dataUrl, content_upload_path: null });
+      renderInventory();
+    });
+    li.appendChild(imageInputEl);
+
+    if (item.content_upload_path || item.content_data_url) {
+      const clearImageButton = document.createElement("button");
+      clearImageButton.type = "button";
+      clearImageButton.textContent = "Remove Image";
+      clearImageButton.addEventListener("click", () => {
+        if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_data_url: null });
+        else updateInventoryItem(item.id, { content_data_url: null, content_upload_path: null });
+        renderInventory();
+      });
+      li.appendChild(clearImageButton);
+    }
+
     const actions = document.createElement("div");
     actions.className = "inventory-actions";
 
     const placeBtn = document.createElement("button");
     placeBtn.textContent = "Place here";
     placeBtn.addEventListener("click", () => {
-      replayInventoryItem(item, textareaEl ? textareaEl.value : null);
+      replayInventoryItem(item, textareaEl.value, urlInputEl.value);
     });
     actions.appendChild(placeBtn);
 
@@ -3359,14 +3675,14 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
   }
 
   if (itemAddTarget === "inventory") {
-    const newItem = {
+    const newItem = normalizeInventoryItem({
       id: crypto.randomUUID(),
       type: classifyItemType(text, Boolean(photoFile)),
       owner: state.ownerId,
       placement_timestamp: new Date().toISOString(),
       content_text: text || null,
       content_data_url: photoFile ? await fileToDataUrl(photoFile) : null,
-    };
+    });
     state.inventory.push(newItem);
     saveInventory();
     renderInventory();

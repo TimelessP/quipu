@@ -107,7 +107,13 @@
         <div class="portal-name-panel">
           <label for="portal-name-input">Portal Name</label>
           <input id="portal-name-input" type="text" maxlength="80" placeholder="Name a portal near you" />
-          <p class="portal-name-hint">Naming and renaming only works when you are physically near the portal.</p>
+          <label for="portal-content-text">Portal Content Text</label>
+          <textarea id="portal-content-text" rows="3" maxlength="5000" placeholder="Optional portal text"></textarea>
+          <label for="portal-content-url">Portal Content URL</label>
+          <input id="portal-content-url" type="url" maxlength="2048" placeholder="https://example.com" />
+          <label for="portal-content-image">Portal Image</label>
+          <input id="portal-content-image" type="file" accept="image/*" />
+          <p class="portal-name-hint">Updates only work when you are physically near the portal.</p>
         </div>
         <div id="portal-link-summary" class="portal-link-summary">No linked portal.</div>
         <div class="portal-modal-actions">
