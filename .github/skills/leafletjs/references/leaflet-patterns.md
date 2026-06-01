@@ -53,6 +53,67 @@ L.tileLayer(url, {
 }
 ```
 
+## Built-in Leaflet Controls and Attribution
+Leaflet's default controls are outside your app component styles, so theme them explicitly.
+
+Key selectors:
+- `.leaflet-control-zoom.leaflet-bar`
+- `.leaflet-control-zoom.leaflet-bar a`
+- `.leaflet-control-attribution`
+
+Recommended approach:
+- create control and attribution theme tokens for background, border, ink, hover, and shadow
+- style zoom controls and attribution using those tokens
+- include `:hover`, `:focus`, and disabled states for zoom anchors
+
+Example pattern:
+
+```css
+:root {
+  --leaflet-control-bg: #fff;
+  --leaflet-control-bg-hover: #f1f1f1;
+  --leaflet-control-border: #101010;
+  --leaflet-control-ink: #050505;
+  --leaflet-control-shadow: none;
+  --leaflet-attrib-bg: rgba(255, 255, 255, 0.96);
+  --leaflet-attrib-border: #101010;
+}
+
+:root[data-theme="dark"] {
+  --leaflet-control-bg: rgba(3, 3, 3, 0.98);
+  --leaflet-control-bg-hover: rgba(14, 14, 14, 0.99);
+  --leaflet-control-border: rgba(39, 244, 255, 0.92);
+  --leaflet-control-ink: #f7fbff;
+  --leaflet-control-shadow: 0 0 0 1px rgba(39, 244, 255, 0.2), 0 0 14px rgba(39, 244, 255, 0.14);
+  --leaflet-attrib-bg: rgba(3, 3, 3, 0.9);
+  --leaflet-attrib-border: rgba(39, 244, 255, 0.82);
+}
+
+.leaflet-control-zoom.leaflet-bar {
+  border: 1px solid var(--leaflet-control-border);
+  background: var(--leaflet-control-bg);
+  box-shadow: var(--leaflet-control-shadow);
+}
+
+.leaflet-control-zoom.leaflet-bar a {
+  background: var(--leaflet-control-bg);
+  color: var(--leaflet-control-ink);
+  border-bottom: 1px solid var(--leaflet-control-border);
+}
+
+.leaflet-control-zoom.leaflet-bar a:hover,
+.leaflet-control-zoom.leaflet-bar a:focus,
+.leaflet-control-zoom.leaflet-bar a:active {
+  background: var(--leaflet-control-bg-hover);
+}
+
+.leaflet-control-attribution {
+  background: var(--leaflet-attrib-bg) !important;
+  color: var(--leaflet-control-ink);
+  border: 1px solid var(--leaflet-attrib-border);
+}
+```
+
 ## Overlay Colors
 Map overlays often need different contrast rules from the app shell.
 

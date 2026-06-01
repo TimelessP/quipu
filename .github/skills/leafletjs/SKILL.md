@@ -1,6 +1,6 @@
 ---
 name: leafletjs
-description: 'Build, integrate, debug, or refine Leaflet.js and React-Leaflet maps. Use for map initialization, tile layers, markers, popups, overlays, viewport loading, follow-location behavior, mobile touch issues, zoom/pan restoration, theme-aware styling, and dark-mode tile filtering.'
+description: 'Build, integrate, debug, or refine Leaflet.js and React-Leaflet maps. Use for map initialization, tile layers, markers, popups, overlays, viewport loading, follow-location behavior, mobile touch issues, zoom/pan restoration, theme-aware styling, dark-mode tile filtering, and built-in Leaflet control theming.'
 argument-hint: 'Describe the Leaflet task, app context, framework, and the behavior you want.'
 user-invocable: true
 ---
@@ -21,6 +21,8 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - "mobile touch map issue"
 - "dark mode map"
 - "Leaflet CSS filter"
+- "Leaflet zoom controls dark mode"
+- "Leaflet attribution dark mode"
 
 ## What This Skill Covers
 - Map bootstrapping and initial view selection
@@ -29,6 +31,7 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - Follow-player and GPS-centered interactions
 - Restoring prior center and zoom without jarring first paint
 - One-shot shared-link map panning
+- Built-in Leaflet zoom control and attribution theming
 - Mobile behavior: touch, orientation, narrow layouts, button density
 - Performance issues from repeated pan/zoom handlers or heavy tile filters
 
@@ -60,19 +63,23 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 6. Handle overlays from theme tokens.
    Marker, circle, and polyline colors should come from CSS custom properties or one theme lookup function so theme changes update map overlays consistently.
 
-7. Protect mobile layout.
+7. Theme built-in Leaflet controls too.
+   If the app uses Leaflet defaults (zoom +/- and attribution), style those selectors with the same dark/light token system so controls do not clash with the map or app chrome.
+
+8. Protect mobile layout.
    For modal or panel actions around map workflows:
    - check narrow portrait layouts
    - verify icon buttons do not collapse or wrap unexpectedly
    - ensure touch states do not fall back to browser default fills
 
-8. Validate with behavior-scoped checks.
+9. Validate with behavior-scoped checks.
    Prefer the narrowest meaningful validation:
    - initial load behavior
    - reload behavior
    - shared-link/deep-link behavior
    - follow button behavior
    - narrow-screen modal layout
+   - zoom control and attribution readability in dark mode
    - theme toggle behavior
 
 ## Common Leaflet Pitfalls
@@ -82,6 +89,7 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - Allowing programmatic `setView()` calls to disable follow mode
 - Triggering duplicate viewport loads from overlapping `moveend` flows
 - Using translucent dark controls over bright map tiles, making controls look pale
+- Leaving Leaflet's built-in zoom or attribution controls unthemed in dark mode
 - Applying heavy dark-mode tile filters without checking performance on mobile
 - Letting mobile media queries collapse action rows that should remain side-by-side
 
@@ -89,6 +97,7 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - Start the map at the restored virtual/user position when available
 - Use a dedicated transient flag for shared-link focus instead of mutating persisted follow state
 - Add `className` to tile layers so CSS can theme them without replacing tile providers
+- Theme Leaflet's built-in controls and attribution with explicit selectors and tokens
 - Centralize color lookup for markers and rings
 - Use one-shot URL consumers that clear params after handling
 

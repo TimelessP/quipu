@@ -39,6 +39,13 @@
   --map-letter: #0073ff;
   --portal-line: #050505;
   --map-tiles-filter: none;
+  --leaflet-control-bg: #ffffff;
+  --leaflet-control-bg-hover: #f1f1f1;
+  --leaflet-control-border: #101010;
+  --leaflet-control-ink: #050505;
+  --leaflet-control-shadow: none;
+  --leaflet-attrib-bg: rgba(255, 255, 255, 0.96);
+  --leaflet-attrib-border: #101010;
   --compass-north: #d4483d;
   --compass-south: #ffffff;
   --compass-core: #244637;
@@ -85,6 +92,13 @@
   --map-letter: #0073ff;
   --portal-line: #ff43d0;
   --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
+  --leaflet-control-bg: rgba(3, 3, 3, 0.98);
+  --leaflet-control-bg-hover: rgba(14, 14, 14, 0.99);
+  --leaflet-control-border: rgba(39, 244, 255, 0.92);
+  --leaflet-control-ink: #f7fbff;
+  --leaflet-control-shadow: 0 0 0 1px rgba(39, 244, 255, 0.2), 0 0 14px rgba(39, 244, 255, 0.14);
+  --leaflet-attrib-bg: rgba(3, 3, 3, 0.9);
+  --leaflet-attrib-border: rgba(39, 244, 255, 0.82);
   --compass-north: #ff7a6b;
   --compass-south: #dff5ea;
   --compass-core: #102019;
@@ -132,6 +146,13 @@
     --map-letter: #0073ff;
     --portal-line: #ff43d0;
     --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
+    --leaflet-control-bg: rgba(3, 3, 3, 0.98);
+    --leaflet-control-bg-hover: rgba(14, 14, 14, 0.99);
+    --leaflet-control-border: rgba(39, 244, 255, 0.92);
+    --leaflet-control-ink: #f7fbff;
+    --leaflet-control-shadow: 0 0 0 1px rgba(39, 244, 255, 0.2), 0 0 14px rgba(39, 244, 255, 0.14);
+    --leaflet-attrib-bg: rgba(3, 3, 3, 0.9);
+    --leaflet-attrib-border: rgba(39, 244, 255, 0.82);
     --compass-north: #ff7a6b;
     --compass-south: #dff5ea;
     --compass-core: #102019;
@@ -783,6 +804,55 @@ button:focus-visible {
 
 .leaflet-top.leaflet-left .leaflet-control {
   margin-top: calc(max(0.75rem, env(safe-area-inset-top)) + 3.1rem);
+}
+
+.leaflet-control-zoom.leaflet-bar {
+  border: 1px solid var(--leaflet-control-border);
+  background: var(--leaflet-control-bg);
+  box-shadow: var(--leaflet-control-shadow);
+}
+
+.leaflet-control-zoom.leaflet-bar a {
+  background: var(--leaflet-control-bg);
+  color: var(--leaflet-control-ink);
+  border-bottom: 1px solid var(--leaflet-control-border);
+  width: 2.15rem;
+  height: 2.15rem;
+  line-height: 2.15rem;
+}
+
+.leaflet-control-zoom.leaflet-bar a:last-child {
+  border-bottom: 0;
+}
+
+.leaflet-control-zoom.leaflet-bar a:hover,
+.leaflet-control-zoom.leaflet-bar a:focus,
+.leaflet-control-zoom.leaflet-bar a:active {
+  background: var(--leaflet-control-bg-hover);
+  color: var(--leaflet-control-ink);
+}
+
+.leaflet-control-zoom.leaflet-bar a.leaflet-disabled {
+  background: var(--leaflet-control-bg);
+  color: color-mix(in srgb, var(--leaflet-control-ink) 45%, transparent);
+}
+
+.leaflet-control-attribution {
+  background: var(--leaflet-attrib-bg) !important;
+  color: var(--leaflet-control-ink);
+  border: 1px solid var(--leaflet-attrib-border);
+  border-radius: 8px;
+  box-shadow: var(--leaflet-control-shadow);
+  backdrop-filter: var(--icon-button-backdrop);
+}
+
+.leaflet-control-attribution a {
+  color: var(--leaflet-control-ink);
+}
+
+.leaflet-control-attribution a:hover,
+.leaflet-control-attribution a:focus {
+  color: var(--accent);
 }
 
 #items {
