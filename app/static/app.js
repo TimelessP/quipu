@@ -1058,16 +1058,20 @@ function applyMapRotation() {
   } else {
     mapPane.style.transformOrigin = "50% 50%";
   }
-  mapPane.style.transform = angle ? `${baseTransform} rotate(${angle}deg) scale(${scale})` : baseTransform;
-  mapPane.style.rotate = "";
-  mapPane.style.scale = "";
+  // Keep Leaflet's translate transform isolated from custom heading transform.
+  mapPane.style.transform = baseTransform;
+  mapPane.style.rotate = angle ? `${angle}deg` : "0deg";
+  mapPane.style.scale = String(scale);
 
   updateMapRotationButton();
 }
 
 function stripRotationTransform(transform) {
   if (!transform) return "";
-  return transform.replace(/\s*rotate\([^)]*\)\s*scale\([^)]*\)\s*$/, "").trim();
+  return transform
+    .replace(/\s*rotate\([^)]*\)/g, "")
+    .replace(/\s*scale\([^)]*\)/g, "")
+    .trim();
 }
 
 function toggleMapRotationMode() {
@@ -1122,6 +1126,9 @@ function applyVirtualOffset(nextOffset, options = {}) {
   if (recenterFollow) {
     state.sharedPortalFocusActive = false;
     state.followPlayer = true;
+    // Reuse the same initial-center branch that is stable on page reload.
+    // This avoids diverging travel-time pan/rotation behavior.
+    state.hasInitialCenter = false;
     updateFollowIndicator();
   }
   if (persist) {
@@ -1131,7 +1138,6 @@ function applyVirtualOffset(nextOffset, options = {}) {
   drawPortalLink();
   renderNearbyItemList();
   updatePortalHud();
-  applyMapRotation();
 }
 
 function resolveSelectedPortalPair() {
@@ -1211,14 +1217,29 @@ function isTypingTarget(target) {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
-function centerMapOnPlayerVirtual(forceZoom = false) {
+function centerMapOnPlayerVirtual(forceZoom = false, options = {}) {
+  const { initialize = false } = options;
   const virtual = getVirtualPosition();
   if (!virtual || !state.map) return;
 
   const currentZoom = state.map.getZoom();
   const nextZoom = forceZoom ? Math.max(currentZoom, 18) : currentZoom;
+  if (state.mapRotationMode !== "north") {
+    const mapPane = state.map.getPanes().mapPane;
+    if (mapPane) {
+      // Leaflet computes translate on mapPane. During portal travel in heading mode,
+      // pre-existing rotate/scale can skew recenter math. Normalize before setView.
+      const baseTransform = stripRotationTransform(mapPane.style.transform);
+      mapPane.style.transform = baseTransform;
+      mapPane.style.rotate = "";
+      mapPane.style.scale = "";
+    }
+  }
+  // Animated setView can drift when mapPane is already rotated/scaled in heading mode.
+  // Keep recenter deterministic for portal jumps/returns by disabling pan animation there.
+  const animate = initialize ? false : state.mapRotationMode === "north";
   state.programmaticMapMove = true;
-  state.map.setView([virtual.lat, virtual.lng], nextZoom, { animate: true });
+  state.map.setView([virtual.lat, virtual.lng], nextZoom, { animate });
 }
 
 function restoreFollowOnNextFrame() {
@@ -1323,8 +1344,7 @@ function refreshLocationAndNearby(preferCache = true) {
 
   if (isFollowingPlayer()) {
     if (!state.hasInitialCenter) {
-      state.programmaticMapMove = true;
-      state.map.setView([virtual.lat, virtual.lng], 18, { animate: false });
+      centerMapOnPlayerVirtual(true, { initialize: true });
       state.hasInitialCenter = true;
     } else {
       centerMapOnPlayerVirtual(false);
@@ -1572,6 +1592,7 @@ function initMap() {
   state.map.on("moveend", () => {
     if (state.programmaticMapMove) {
       state.programmaticMapMove = false;
+      applyMapRotation();
       return;
     }
 
@@ -1586,9 +1607,18 @@ function initMap() {
 
   state.map.on("zoomend", updatePlayerRangeRing);
 
-  state.map.on("move", applyMapRotation);
-  state.map.on("zoom", applyMapRotation);
-  state.map.on("zoomend", applyMapRotation);
+  state.map.on("move", () => {
+    if (state.programmaticMapMove) return;
+    applyMapRotation();
+  });
+  state.map.on("zoom", () => {
+    if (state.programmaticMapMove) return;
+    applyMapRotation();
+  });
+  state.map.on("zoomend", () => {
+    if (state.programmaticMapMove) return;
+    applyMapRotation();
+  });
   state.map.on("resize", applyMapRotation);
 
   state.map.on("click", () => {
