@@ -49,6 +49,8 @@
   --compass-north: #d4483d;
   --compass-south: #ffffff;
   --compass-core: #244637;
+  --selection-bg: #0050b8;
+  --selection-ink: #ffffff;
 }
 
 :root[data-theme="dark"] {
@@ -102,6 +104,8 @@
   --compass-north: #ff7a6b;
   --compass-south: #dff5ea;
   --compass-core: #102019;
+  --selection-bg: #27f4ff;
+  --selection-ink: #041014;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -156,11 +160,53 @@
     --compass-north: #ff7a6b;
     --compass-south: #dff5ea;
     --compass-core: #102019;
+    --selection-bg: #27f4ff;
+    --selection-ink: #041014;
   }
 }
 
 .map-tiles {
   filter: var(--map-tiles-filter);
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
+}
+
+::-moz-selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
+}
+
+input::selection,
+textarea::selection,
+button::selection,
+small::selection,
+p::selection,
+h1::selection,
+h2::selection,
+h3::selection,
+label::selection,
+li::selection,
+span::selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
+}
+
+input::-moz-selection,
+textarea::-moz-selection,
+button::-moz-selection,
+small::-moz-selection,
+p::-moz-selection,
+h1::-moz-selection,
+h2::-moz-selection,
+h3::-moz-selection,
+label::-moz-selection,
+li::-moz-selection,
+span::-moz-selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
 }
 
 * {
