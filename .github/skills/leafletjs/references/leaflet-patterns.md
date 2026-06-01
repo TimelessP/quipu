@@ -23,6 +23,34 @@ For links that pan the map to a location:
 - after handling, remove params from the URL with `history.replaceState`
 - avoid saving the temporary deep-link state into persisted follow preferences
 
+## Heading-Mode Rotation and Pan Transform Isolation
+When implementing a heading-up map, do not append custom `rotate()`/`scale()` transforms directly into `mapPane.style.transform`.
+Leaflet continuously rewrites that property for panning, and mixed transform ownership can produce directional pan offsets after `setView()` or portal travel.
+
+Recommended approach:
+- treat `mapPane.style.transform` as Leaflet-owned translate only
+- strip legacy rotate/scale tokens from that string before writing it back
+- apply heading visuals with longhands: `mapPane.style.rotate` and `mapPane.style.scale`
+- keep one function responsible for reapplying rotation after programmatic moves
+
+Example pattern:
+
+```js
+function stripRotationTransform(transform) {
+  if (!transform) return "";
+  return transform
+    .replace(/\s*rotate\([^)]*\)/g, "")
+    .replace(/\s*scale\([^)]*\)/g, "")
+    .trim();
+}
+
+function applyMapRotation(mapPane, angle, scale) {
+  mapPane.style.transform = stripRotationTransform(mapPane.style.transform);
+  mapPane.style.rotate = angle ? `${angle}deg` : "0deg";
+  mapPane.style.scale = String(scale);
+}
+```
+
 ## Theme-Aware Tile Styling
 For filtered dark mode on standard OSM tiles:
 - assign a stable class name to the tile layer such as `map-tiles`

@@ -31,6 +31,7 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - Follow-player and GPS-centered interactions
 - Restoring prior center and zoom without jarring first paint
 - One-shot shared-link map panning
+- Heading-mode map rotation without corrupting Leaflet pan transforms
 - Built-in Leaflet zoom control and attribution theming
 - Mobile behavior: touch, orientation, narrow layouts, button density
 - Performance issues from repeated pan/zoom handlers or heavy tile filters
@@ -88,6 +89,7 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - Treating missing URL params as numeric zeroes with `Number(null)`
 - Allowing programmatic `setView()` calls to disable follow mode
 - Triggering duplicate viewport loads from overlapping `moveend` flows
+- Composing custom `rotate()/scale()` into Leaflet's live `mapPane.style.transform`, causing pan offsets in heading mode
 - Using translucent dark controls over bright map tiles, making controls look pale
 - Leaving Leaflet's built-in zoom or attribution controls unthemed in dark mode
 - Applying heavy dark-mode tile filters without checking performance on mobile
@@ -97,6 +99,7 @@ Use this skill when working on Leaflet-based maps in vanilla JS, React, or simil
 - Start the map at the restored virtual/user position when available
 - Use a dedicated transient flag for shared-link focus instead of mutating persisted follow state
 - Add `className` to tile layers so CSS can theme them without replacing tile providers
+- Keep Leaflet translate in `mapPane.style.transform`; apply heading rotation/zoom via separate `style.rotate` and `style.scale`
 - Theme Leaflet's built-in controls and attribution with explicit selectors and tokens
 - Centralize color lookup for markers and rings
 - Use one-shot URL consumers that clear params after handling
