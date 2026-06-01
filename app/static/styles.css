@@ -38,6 +38,7 @@
   --map-photo: #ff8a00;
   --map-letter: #0073ff;
   --portal-line: #050505;
+  --map-tiles-filter: none;
   --compass-north: #d4483d;
   --compass-south: #ffffff;
   --compass-core: #244637;
@@ -83,6 +84,7 @@
   --map-photo: #ff8a00;
   --map-letter: #0073ff;
   --portal-line: #ff43d0;
+  --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
   --compass-north: #ff7a6b;
   --compass-south: #dff5ea;
   --compass-core: #102019;
@@ -129,10 +131,15 @@
     --map-photo: #ff8a00;
     --map-letter: #0073ff;
     --portal-line: #ff43d0;
+    --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
     --compass-north: #ff7a6b;
     --compass-south: #dff5ea;
     --compass-core: #102019;
   }
+}
+
+.map-tiles {
+  filter: var(--map-tiles-filter);
 }
 
 * {

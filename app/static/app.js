@@ -1558,6 +1558,7 @@ function initMap() {
     maxNativeZoom: 19,
     maxZoom: 22,
     attribution: "&copy; OpenStreetMap contributors",
+    className: "map-tiles",
   }).addTo(state.map);
 
   state.map.on("movestart", () => {
