@@ -2172,7 +2172,7 @@ function onItemClicked(item) {
 }
 
 function getPhysicalNearbyPortals(maxMeters = PICKUP_RANGE_METERS) {
-  const actor = getEffectiveActorPosition();
+  const actor = state.physicalPosition;
   if (!actor) return;
   const portals = state.displayItems.filter((i) => i.type === "portal_marker");
   const nearby = portals
@@ -2187,6 +2187,11 @@ function getPhysicalNearbyPortals(maxMeters = PICKUP_RANGE_METERS) {
 
 function setRemotePortal(item) {
   if (!item || item.type !== "portal_marker") return;
+
+  if (isVirtualShiftActive()) {
+    notify("Linking is only allowed when not teleported and physically near a portal.", "error", 3200);
+    return;
+  }
 
   const physicalNearby = getPhysicalNearbyPortals(PICKUP_RANGE_METERS);
   if (!physicalNearby || !physicalNearby.length) {
