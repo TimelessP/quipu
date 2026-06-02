@@ -3829,11 +3829,26 @@ async function removePortalItem(item) {
     return;
   }
 
+  invalidatePortalCache(item.id);
+
   if (state.selectedLocalPortalId === item.id || state.selectedRemotePortalId === item.id) {
     clearPortalLink(false);
   }
 
   removePortalFavoriteById(item.id);
+
+  const removedFromState = removeItemFromClientState(item.id);
+  if (removedFromState) {
+    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
+    renderMapItems();
+    renderNearbyItemList();
+    renderInventory();
+    renderPortalSelection();
+    renderPortalModal();
+    updatePortalHud();
+    updateTopOverlayButtons();
+    drawPortalLink();
+  }
 
   const virtual = getVirtualPosition();
   if (virtual) {
