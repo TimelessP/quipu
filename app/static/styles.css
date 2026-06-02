@@ -958,9 +958,7 @@ h2 {
 }
 
 .status-panel {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  position: static;
 }
 
 .panel-header {
@@ -968,6 +966,13 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+  margin: -0.7rem -0.7rem 0;
+  padding: 0.7rem 0.7rem 0.45rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 38%, transparent);
 }
 
 .panel-header h1 {
@@ -982,6 +987,68 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.45rem;
+}
+
+.menu-share-panel {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.2rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
+}
+
+.menu-share-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.menu-share-header strong {
+  font-size: 0.92rem;
+}
+
+.menu-share-header button {
+  width: auto;
+  min-width: 92px;
+  margin-left: auto;
+  padding-inline: 0.6rem;
+}
+
+.menu-share-qr {
+  width: 146px;
+  height: 146px;
+  margin: 0 auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.menu-share-qr > img,
+.menu-share-qr > canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.menu-share-url {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.menu-share-url:hover,
+.menu-share-url:focus {
+  color: var(--link-hover);
+  text-decoration: underline;
 }
 
 .hint {
@@ -1242,6 +1309,11 @@ button:focus-visible {
 
   .status-panel {
     position: static;
+  }
+
+  .menu-share-qr {
+    width: min(64vw, 146px);
+    height: min(64vw, 146px);
   }
 
   .leaflet-top.leaflet-left .leaflet-control {

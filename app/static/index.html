@@ -223,22 +223,23 @@
           </div>
           <div id="network-status">Network: checking...</div>
           <div id="dimension-status">Dimension: loading...</div>
+          <div id="menu-share-panel" class="menu-share-panel" aria-label="Share this page">
+            <div class="menu-share-header">
+              <strong>Share This View</strong>
+              <button id="menu-share-copy" type="button">Copy URL</button>
+            </div>
+            <div id="menu-share-qr" class="menu-share-qr" role="img" aria-label="QR code for current URL"></div>
+            <a id="menu-share-url" class="menu-share-url" href="#" target="_blank" rel="noopener noreferrer"></a>
+          </div>
           <div id="location-status">Location: waiting for GPS...</div>
           <p class="hint">Shortcuts: M menu, 1/2/3 locations, arrows walk, R re-center, Escape close.</p>
-        </section>
-        <section class="panel">
-          <h2>Mode</h2>
-          <div id="gps-spoofer-status">GPS Debug: using real GPS.</div>
-          <label>
-            Walk Amount (meters)
-            <input id="gps-walk-meters" type="number" min="1" step="1" value="10" />
-          </label>
         </section>
       </aside>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="/static/app.js" type="module"></script>
   </body>
 </html>

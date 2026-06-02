@@ -71,6 +71,9 @@ const GPS_PRESETS = {
 
 const networkStatusEl = document.getElementById("network-status");
 const dimensionStatusEl = document.getElementById("dimension-status");
+const menuShareQrEl = document.getElementById("menu-share-qr");
+const menuShareUrlEl = document.getElementById("menu-share-url");
+const menuShareCopyButtonEl = document.getElementById("menu-share-copy");
 const locationStatusEl = document.getElementById("location-status");
 const itemsEl = document.getElementById("location-items-list");
 const portalSelectionEl = document.getElementById("portal-link-summary");
@@ -123,9 +126,54 @@ let persistClientStateTimerId = null;
 let followRestoreFrameId = null;
 let portalEditorTargetId = null;
 let portalEditorBaseline = null;
+let menuShareQrCode = null;
+// Two-level concurrency guard for loadNearby:
+// - loadNearbyFreshGeneration: incremented whenever a network fetch starts;
+//   only a newer network fetch supersedes an older one.
+// - loadNearbyFreshInFlight: count of in-progress network fetches;
+//   cache-path renders are suppressed while this is non-zero so they
+//   never clobber a pending authoritative result (including remote players' items).
+let loadNearbyFreshGeneration = 0;
+let loadNearbyFreshInFlight = 0;
+let menuShareLastUrl = "";
 const uiSessionId = crypto.randomUUID();
 let uiStack = [];
 let syncingUiFromHistory = false;
+
+function getClientShareUrl() {
+  return window.location.href;
+}
+
+function renderMenuShareQr(force = false) {
+  if (!menuShareQrEl || !menuShareUrlEl) return;
+
+  const shareUrl = getClientShareUrl();
+  if (!force && shareUrl === menuShareLastUrl) return;
+  menuShareLastUrl = shareUrl;
+
+  menuShareUrlEl.href = shareUrl;
+  menuShareUrlEl.textContent = shareUrl;
+
+  if (typeof window.QRCode !== "function") {
+    menuShareQrEl.textContent = "QR unavailable";
+    return;
+  }
+
+  if (!menuShareQrCode) {
+    menuShareQrEl.innerHTML = "";
+    menuShareQrCode = new window.QRCode(menuShareQrEl, {
+      text: shareUrl,
+      width: 140,
+      height: 140,
+      colorDark: "#000000",
+      colorLight: "#ffffff",
+      correctLevel: window.QRCode.CorrectLevel.M,
+    });
+    return;
+  }
+
+  menuShareQrCode.makeCode(shareUrl);
+}
 
 function isFiniteLatLng(value) {
   if (!value) return false;
@@ -227,6 +275,7 @@ function closeUiLayer(layerId) {
 function updateUiHistoryOnPop(event) {
   const stack = getUiStackFromHistory(event.state);
   syncUiStack(stack);
+  renderMenuShareQr();
 }
 
 function persistClientStateNow() {
@@ -2701,11 +2750,18 @@ async function loadNearby(lat, lng, preferCache = true) {
   const maxRangeMeters = PICKUP_RANGE_METERS;
   const nearbyKey = `${state.dimensionRootId}:nearby:${lat.toFixed(4)}:${lng.toFixed(4)}:${maxRangeMeters}`;
 
+  // Cache fast-path: skip rendering if a network fetch is already in-flight so
+  // we don't flash stale data (which would be missing another player's just-placed item)
+  // over a pending authoritative result.
   if (preferCache) {
     const cached = cacheRead(nearbyKey);
     if (cached) {
+      if (loadNearbyFreshInFlight > 0) return;
       const h3Api = window.h3;
-      state.nearbyItems = await reconcileNearbyFavoritePortalItems(cached.items || [], h3Api);
+      const reconciledItems = await reconcileNearbyFavoritePortalItems(cached.items || [], h3Api);
+      // Re-check after the async reconcile step.
+      if (loadNearbyFreshInFlight > 0) return;
+      state.nearbyItems = reconciledItems;
       for (const item of state.nearbyItems) {
         if (item.type === "portal_marker") updatePortalItemsInState(item);
       }
@@ -2718,6 +2774,12 @@ async function loadNearby(lat, lng, preferCache = true) {
       return;
     }
   }
+
+  // Network path: take a generation ticket so a newer network fetch (e.g. a second
+  // placement or explicit refresh) supersedes this one, but a cache-path call cannot.
+  const freshGeneration = ++loadNearbyFreshGeneration;
+  const isSuperseded = () => freshGeneration !== loadNearbyFreshGeneration;
+  loadNearbyFreshInFlight++;
 
   try {
     const h3Api = window.h3;
@@ -2740,6 +2802,8 @@ async function loadNearby(lat, lng, preferCache = true) {
       })
     );
 
+    if (isSuperseded()) return;
+
     const itemIds = Array.from(new Set(cellPayloads.flatMap((payload) => payload.item_ids || [])));
     const items = (
       await Promise.all(
@@ -2758,6 +2822,8 @@ async function loadNearby(lat, lng, preferCache = true) {
 
     const reconciledItems = await reconcileNearbyFavoritePortalItems(items, h3Api);
 
+    if (isSuperseded()) return;
+
     const nearbyItems = reconciledItems.filter(
       (item) => haversineMeters(lat, lng, item.latitude, item.longitude) <= maxRangeMeters
     );
@@ -2775,6 +2841,7 @@ async function loadNearby(lat, lng, preferCache = true) {
     drawPortalLink();
   } catch (err) {
     console.error("Failed to load nearby items", err);
+    if (isSuperseded()) return;
     const cached = cacheRead(nearbyKey);
     if (cached) {
       state.nearbyItems = cached.items || [];
@@ -2788,6 +2855,8 @@ async function loadNearby(lat, lng, preferCache = true) {
       updatePortalHud();
       drawPortalLink();
     }
+  } finally {
+    loadNearbyFreshInFlight--;
   }
 }
 
@@ -3250,6 +3319,7 @@ function clearSharedPortalParamsFromUrl() {
   url.searchParams.delete(SHARED_PORTAL_LAT_PARAM);
   url.searchParams.delete(SHARED_PORTAL_LNG_PARAM);
   history.replaceState(history.state, "", url.toString());
+  renderMenuShareQr(true);
 }
 
 function repairFollowStateAfterSharedPortalRegression() {
@@ -3487,6 +3557,22 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("popstate", updateUiHistoryOnPop);
+
+menuShareCopyButtonEl?.addEventListener("click", async () => {
+  const shareUrl = getClientShareUrl();
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(shareUrl);
+      notify("Current URL copied.", "success", 2200);
+      return;
+    }
+  } catch {
+    // Fall back to prompt.
+  }
+
+  window.prompt("Copy page URL:", shareUrl);
+});
 
 window.addEventListener("keydown", (event) => {
   if (isTypingTarget(event.target)) return;
@@ -4071,6 +4157,7 @@ async function boot() {
   applyMapRotation();
   history.replaceState({ uiSessionId, uiStack: [] }, "", window.location.href);
   syncUiStack([]);
+  renderMenuShareQr(true);
   updatePlayerMarkers();
   updateFollowIndicator();
   updateTopOverlayButtons();
@@ -4087,6 +4174,7 @@ async function boot() {
   beginGeolocation();
   await replayQueue();
   await applySharedPortalLocationFromUrl();
+  renderMenuShareQr(true);
 }
 
 boot();
