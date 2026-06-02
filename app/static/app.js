@@ -1985,6 +1985,66 @@ function removeItemFromClientState(itemId) {
   return changed;
 }
 
+function purgePortalFromClientState(portalId) {
+  if (!portalId) return false;
+
+  let changed = false;
+  const listNames = ["nearbyItems", "viewportPortalItems", "displayItems"];
+  for (const listName of listNames) {
+    const list = state[listName];
+    if (!Array.isArray(list) || !list.length) continue;
+    const next = list.filter((item) => item?.id !== portalId);
+    if (next.length !== list.length) {
+      state[listName] = next;
+      changed = true;
+    }
+  }
+
+  const marker = state.itemMarkers.get(portalId);
+  if (marker) {
+    state.map?.removeLayer(marker);
+    state.itemMarkers.delete(portalId);
+    changed = true;
+  }
+
+  let clearedLink = false;
+  if (state.selectedLocalPortalId === portalId) {
+    state.selectedLocalPortalId = null;
+    state.selectedLocalPortalPos = null;
+    clearedLink = true;
+    changed = true;
+  }
+  if (state.selectedRemotePortalId === portalId) {
+    state.selectedRemotePortalId = null;
+    state.selectedRemotePortalPos = null;
+    clearedLink = true;
+    changed = true;
+  }
+
+  if (clearedLink && state.portalLine) {
+    state.map?.removeLayer(state.portalLine);
+    state.portalLine = null;
+  }
+
+  if (removePortalFavoriteById(portalId)) {
+    changed = true;
+  }
+
+  if (changed) {
+    savePortalSession();
+    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
+    renderMapItems();
+    renderNearbyItemList();
+    renderPortalSelection();
+    renderPortalModal();
+    updatePortalHud();
+    updateTopOverlayButtons();
+    drawPortalLink();
+  }
+
+  return changed;
+}
+
 function reconcileMissingItem(itemId) {
   if (!itemId) return;
   invalidateItemCache(itemId);
@@ -2202,6 +2262,14 @@ function getNearestPortalAtVirtualPosition(maxMeters = PICKUP_RANGE_METERS) {
   return best;
 }
 
+function getPortalRemovalTarget() {
+  const editorTarget = getPortalEditorTargetPortal();
+  if (editorTarget && editorTarget.type === "portal_marker") {
+    return editorTarget;
+  }
+  return getPhysicalNearbyPortals(PORTAL_REMOVE_RANGE_METERS)?.[0]?.portal || null;
+}
+
 function drawPortalLink() {
   if (!state.selectedLocalPortalId || !state.selectedRemotePortalId) return;
   const local =
@@ -2350,7 +2418,7 @@ function renderPortalModal() {
   if (addHereButton) addHereButton.disabled = shifted;
   if (addFavoriteButton) addFavoriteButton.disabled = !getNearestPortalAtVirtualPosition(PICKUP_RANGE_METERS);
   if (clearButton) clearButton.disabled = !canClearCurrentPortalLink();
-  if (removeNearbyButton) removeNearbyButton.disabled = !(getPhysicalNearbyPortals(PORTAL_REMOVE_RANGE_METERS)?.length);
+  if (removeNearbyButton) removeNearbyButton.disabled = !getPortalRemovalTarget();
 
   const targetPortal = getPortalEditorTargetPortal();
   if (!targetPortal) {
@@ -3488,12 +3556,13 @@ document.getElementById("portal-clear-link")?.addEventListener("click", () => {
 });
 
 document.getElementById("portal-remove-nearby")?.addEventListener("click", async () => {
-  const nearby = getPhysicalNearbyPortals(PORTAL_REMOVE_RANGE_METERS);
-  if (!nearby || !nearby.length) {
+  const targetPortal = getPortalRemovalTarget();
+  if (!targetPortal) {
     notify("Move physically within range of a portal to remove it.", "error", 2800);
     return;
   }
-  await removePortalItem(nearby[0].portal);
+
+  await removePortalItem(targetPortal);
   renderPortalModal();
 });
 
@@ -3835,20 +3904,7 @@ async function removePortalItem(item) {
     clearPortalLink(false);
   }
 
-  removePortalFavoriteById(item.id);
-
-  const removedFromState = removeItemFromClientState(item.id);
-  if (removedFromState) {
-    state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
-    renderMapItems();
-    renderNearbyItemList();
-    renderInventory();
-    renderPortalSelection();
-    renderPortalModal();
-    updatePortalHud();
-    updateTopOverlayButtons();
-    drawPortalLink();
-  }
+  reconcileMissingItem(item.id);
 
   const virtual = getVirtualPosition();
   if (virtual) {
