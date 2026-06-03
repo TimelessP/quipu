@@ -41,7 +41,8 @@ const H3_RESOLUTION = 12;
 // 200 is a comfortable ceiling that prevents accidental global queries.
 const MAX_VIEWPORT_CELLS = 200;
 const MIN_PORTAL_SPACING_METERS = 8;
-const PORTAL_REMOVE_RANGE_METERS = 8;
+const PORTAL_INTERACTION_RANGE_METERS = PICKUP_RANGE_METERS;
+const PORTAL_REMOVE_RANGE_METERS = PORTAL_INTERACTION_RANGE_METERS;
 const SHARED_PORTAL_LAT_PARAM = "portal_lat";
 const SHARED_PORTAL_LNG_PARAM = "portal_lng";
 const inventoryKey = "quipuInventoryV1";
