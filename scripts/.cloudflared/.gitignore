@@ -1,0 +1,3 @@
+# Cloudflare tunnel credentials - never commit these
+*.json
+cert.pem
