@@ -41,18 +41,17 @@ Open:
 
 Geolocation requires a secure context.
 
-If you want `serve.sh` to echo the current tunnel URL, start the tunnel first,
-then start/restart the server:
+Run the server and tunnel as separate lifecycles:
 
 ```bash
 # terminal 1
-bash scripts/tunnel.sh
+bash scripts/serve.sh
 
 # terminal 2
-bash scripts/serve.sh
+bash scripts/tunnel.sh start
 ```
 
-Tunnel lifecycle:
+Quick tunnel lifecycle (ephemeral `https://*.trycloudflare.com` URL):
 
 ```bash
 bash scripts/tunnel.sh start
@@ -62,9 +61,31 @@ bash scripts/tunnel.sh stop
 bash scripts/tunnel.sh logs
 ```
 
+Warning about ephemeral tunnel hostnames:
+
+- Each `scripts/tunnel.sh` start usually gets a new `*.trycloudflare.com` FQDN.
+- Browser local storage is origin-scoped, so each new FQDN gets a separate local storage bucket.
+- Over time, local storage entries can accumulate across old tunnel origins.
+- Inventory/items cached or queued in one tunnel origin may appear inaccessible after the FQDN changes.
+- For stable origin behavior, use `scripts/named-tunnel.sh` with a fixed hostname.
+
+Named tunnel lifecycle (stable custom hostname via Cloudflare account):
+
+```bash
+bash scripts/named-tunnel.sh init
+bash scripts/named-tunnel.sh start
+bash scripts/named-tunnel.sh status
+bash scripts/named-tunnel.sh restart
+bash scripts/named-tunnel.sh stop
+bash scripts/named-tunnel.sh logs
+```
+
 The script downloads `cloudflared` automatically (no account needed) and prints
 a `https://*.trycloudflare.com` URL — open that on your Android device.
 The URL changes each session; no self-signed certificates are involved.
+
+`scripts/serve.sh` does not manage tunnel startup/shutdown; use one of the tunnel
+scripts above explicitly.
 
 ## API quick checks
 

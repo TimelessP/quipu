@@ -10,7 +10,10 @@
 - Setup: bash scripts/setup.sh
 - Serve (default start): bash scripts/serve.sh
 - Serve lifecycle: bash scripts/serve.sh start|status|restart|stop|logs
-- Optional tunnel for secure mobile geolocation: bash scripts/tunnel.sh start
+- Quick tunnel lifecycle (ephemeral URL): bash scripts/tunnel.sh start|status|restart|stop|logs
+- Named tunnel lifecycle (stable URL): bash scripts/named-tunnel.sh start|status|restart|stop|logs
+- Tunnel scripts are separate from serve.sh; do not add tunnel start/stop/status logic to serve.sh.
+- Quick tunnel hostnames change over time; account for origin-scoped browser localStorage (data can fragment across FQDNs).
 
 ## Coding Expectations
 - Keep edits minimal and focused on the requested behavior.
