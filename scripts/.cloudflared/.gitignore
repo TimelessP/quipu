@@ -1,3 +1,5 @@
 # Cloudflare tunnel credentials - never commit these
 *.json
 cert.pem
+tunnel.state
+config.yml

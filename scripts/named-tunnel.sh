@@ -67,6 +67,27 @@ mkdir -p "$BIN_DIR" "$CF_DIR"
 # ── Detect or download cloudflared ───────────────────────────────────────────
 
 CLOUDFLARED="$BIN_DIR/cloudflared"
+ORIGIN_CERT="$CF_DIR/cert.pem"
+
+ensure_origin_cert() {
+  if [[ -s "$ORIGIN_CERT" ]]; then
+    return 0
+  fi
+
+  local default_cert="$HOME/.cloudflared/cert.pem"
+  if [[ -s "$default_cert" ]]; then
+    cp "$default_cert" "$ORIGIN_CERT"
+    chmod 600 "$ORIGIN_CERT" || true
+    echo "Using Cloudflare origin cert from $default_cert"
+    return 0
+  fi
+
+  echo "ERROR: Cloudflare origin cert not found." >&2
+  echo "  Expected: $ORIGIN_CERT" >&2
+  echo "  Also checked: $default_cert" >&2
+  echo "  Run: cloudflared tunnel login" >&2
+  exit 1
+}
 
 ensure_cloudflared() {
   if [[ -x "$CLOUDFLARED" ]]; then
@@ -169,12 +190,20 @@ cmd_init() {
   echo "════════════════════════════════════════════════════════"
   echo ""
   echo "Step 1/4  Login to Cloudflare"
-  echo "  Your browser will open. Select the domain you want to"
-  echo "  use. cloudflared will save credentials to:"
-  echo "  ${CF_DIR}/cert.pem"
-  echo ""
-  read -rp "Press Enter to open the browser login …"
-  "$CLOUDFLARED" tunnel --origincert "$CF_DIR/cert.pem" login
+  local default_cert="$HOME/.cloudflared/cert.pem"
+  if [[ -s "$ORIGIN_CERT" || -s "$default_cert" ]]; then
+    echo "  Existing Cloudflare login credentials detected."
+    echo "  Reusing certificate and skipping browser login."
+    ensure_origin_cert
+  else
+    echo "  Your browser will open. Select the domain you want to"
+    echo "  use. cloudflared will save credentials to:"
+    echo "  ${ORIGIN_CERT}"
+    echo ""
+    read -rp "Press Enter to open the browser login …"
+    "$CLOUDFLARED" tunnel login
+    ensure_origin_cert
+  fi
   echo ""
 
   echo "Step 2/4  Tunnel name"
@@ -194,7 +223,7 @@ cmd_init() {
 
   echo "Step 4/4  Creating tunnel and DNS record …"
   "$CLOUDFLARED" tunnel \
-    --origincert "$CF_DIR/cert.pem" \
+    --origincert "$ORIGIN_CERT" \
     create \
     --credentials-file "$CF_DIR/${TUNNEL_NAME}.json" \
     "$TUNNEL_NAME"
@@ -210,7 +239,7 @@ cmd_init() {
   fi
 
   "$CLOUDFLARED" tunnel \
-    --origincert "$CF_DIR/cert.pem" \
+    --origincert "$ORIGIN_CERT" \
     route dns \
     "$TUNNEL_NAME" \
     "$HOSTNAME"
@@ -390,10 +419,11 @@ cmd_teardown() {
   fi
 
   ensure_cloudflared
+  ensure_origin_cert
 
   echo "Deleting Cloudflare tunnel (this also removes the DNS record) …"
   "$CLOUDFLARED" tunnel \
-    --origincert "$CF_DIR/cert.pem" \
+    --origincert "$ORIGIN_CERT" \
     delete \
     --credentials-file "$CF_DIR/${TUNNEL_NAME}.json" \
     --force \

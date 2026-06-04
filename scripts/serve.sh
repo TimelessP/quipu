@@ -44,14 +44,6 @@ LOG_FILE="${QUIPU_LOG_FILE:-/tmp/quipu-server.log}"
 STARTUP_TIMEOUT_SECONDS="${QUIPU_STARTUP_TIMEOUT_SECONDS:-12}"
 COMMAND="${1:-start}"
 
-tunnel_fqdn() {
-  local tunnel_log="/tmp/quipu-tunnel.log"
-  if [[ ! -f "$tunnel_log" ]]; then
-    return 0
-  fi
-  grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' "$tunnel_log" | tail -n 1 || true
-}
-
 is_running() {
   if [[ ! -f "$PID_FILE" ]]; then
     return 1
@@ -66,13 +58,7 @@ is_running() {
 
 print_connect_info() {
   echo "Connect (local): http://127.0.0.1:${PORT}"
-  local fqdn
-  fqdn="$(tunnel_fqdn)"
-  if [[ -n "$fqdn" ]]; then
-    echo "Connect (tunnel): ${fqdn}"
-  else
-    echo "Connect (tunnel): not found yet (run scripts/tunnel.sh)"
-  fi
+  echo "Tunnel: run scripts/tunnel.sh or scripts/named-tunnel.sh separately"
 }
 
 start_server() {
