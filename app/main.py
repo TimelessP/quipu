@@ -7,16 +7,30 @@ from pathlib import Path
 import h3
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
 
 from app import config
-from app.models import ItemDocument, ItemType, PlaceItemRequest, RenamePortalRequest
+from app.models import (
+    FavoritePortalItemDocument,
+    ItemDocument,
+    ItemType,
+    MediaItemDocument,
+    PlaceFavoritePortalItemRequest,
+    PlaceItemRequest,
+    PlaceMediaItemRequest,
+    PlacePortalMarkerItemRequest,
+    PlaceVisitCounterItemRequest,
+    PortalMarkerItemDocument,
+    RenamePortalRequest,
+    VisitCounterItemDocument,
+)
 from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
+ASSET_VERSION = "20260605-2"
 
 app.add_middleware(
     CORSMiddleware,
@@ -93,60 +107,90 @@ def get_item(item_id: str) -> dict:
     return item.model_dump(mode="json")
 
 
-@app.post("/api/dimensions/{root_id}/items")
-def place_item(root_id: str, request: PlaceItemRequest) -> dict:
-    _validate_accuracy(request.accuracy_meters)
+def _validate_upload_path(upload_path: str) -> None:
+    if not upload_path.startswith("/uploads/"):
+        raise HTTPException(status_code=400, detail="Invalid upload path")
+    filename = upload_path[len("/uploads/"):]
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid upload path")
+    if not (config.UPLOADS_DIR / filename).exists():
+        raise HTTPException(status_code=400, detail="Upload file not found")
 
-    portal_name = request.portal_name.strip() if request.portal_name else None
-    favorite_portal_name = request.favorite_portal_name.strip() if request.favorite_portal_name else None
 
-    if request.type == ItemType.LETTER and not request.content_text and not request.content_url:
-        raise HTTPException(status_code=400, detail="content_text or content_url is required for letter items")
-    if request.type == ItemType.PORTAL_MARKER and (request.content_text or request.content_url or request.content_upload_path):
-        raise HTTPException(status_code=400, detail="portal_marker cannot include content content")
-    if request.type != ItemType.PORTAL_MARKER and request.portal_name:
-        raise HTTPException(status_code=400, detail="portal_name is only allowed for portal markers")
-    if request.type == ItemType.FAVORITE_PORTAL_ITEM:
-        if not request.favorite_portal_id:
-            raise HTTPException(status_code=400, detail="favorite_portal_id is required for favorite portal items")
-        if request.favorite_portal_latitude is None or request.favorite_portal_longitude is None:
-            raise HTTPException(status_code=400, detail="favorite portal coordinates are required for favorite portal items")
-    if request.type == ItemType.PHOTOGRAPH and not request.content_upload_path:
-        raise HTTPException(status_code=400, detail="content_upload_path required for photograph placement")
-    if request.type in (ItemType.PHOTOGRAPH, ItemType.FAVORITE_PORTAL_ITEM) and request.content_upload_path:
-        # Validate path is safe — must reference an existing upload, no traversal
-        if not request.content_upload_path.startswith("/uploads/"):
-            raise HTTPException(status_code=400, detail="Invalid upload path")
-        filename = request.content_upload_path[len("/uploads/"):]
-        if "/" in filename or ".." in filename:
-            raise HTTPException(status_code=400, detail="Invalid upload path")
-        if not (config.UPLOADS_DIR / filename).exists():
-            raise HTTPException(status_code=400, detail="Upload file not found")
-
-    if request.type == ItemType.PORTAL_MARKER:
-        _validate_portal_spacing(root_id, request.latitude, request.longitude)
-
+def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_path: str | None = None) -> ItemDocument:
     cell_id = h3.latlng_to_cell(request.latitude, request.longitude, config.H3_RESOLUTION)
-
-    item = ItemDocument(
+    common_kwargs = dict(
         id=str(uuid.uuid4()),
-        type=request.type,
         owner=request.owner,
         latitude=request.latitude,
         longitude=request.longitude,
         accuracy_meters=request.accuracy_meters,
-        portal_name=portal_name if request.type == ItemType.PORTAL_MARKER else None,
-        favorite_portal_id=request.favorite_portal_id if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        favorite_portal_latitude=request.favorite_portal_latitude if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        favorite_portal_longitude=request.favorite_portal_longitude if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        favorite_portal_name=favorite_portal_name if request.type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        content_text=request.content_text,
-        content_url=request.content_url,
-        content_upload_path=request.content_upload_path,
         dimension_root_id=root_id,
     )
+
+    if isinstance(request, PlaceMediaItemRequest):
+        content_upload_path = upload_path or request.content_upload_path
+        if content_upload_path:
+            _validate_upload_path(content_upload_path)
+        if not (request.content_name or request.content_text or request.content_url or content_upload_path):
+            raise HTTPException(status_code=400, detail="Media items need at least one content field")
+        item = MediaItemDocument(
+            type=ItemType.MEDIA,
+            content_name=request.content_name.strip() if request.content_name else None,
+            content_text=request.content_text,
+            content_url=request.content_url,
+            content_upload_path=content_upload_path,
+            **common_kwargs,
+        )
+    elif isinstance(request, PlaceVisitCounterItemRequest):
+        item = VisitCounterItemDocument(
+            type=ItemType.VISIT_COUNTER,
+            visit_counter_name=request.visit_counter_name.strip() if request.visit_counter_name else None,
+            visit_count=0,
+            **common_kwargs,
+        )
+    elif isinstance(request, PlacePortalMarkerItemRequest):
+        item = PortalMarkerItemDocument(
+            type=ItemType.PORTAL_MARKER,
+            portal_name=request.portal_name.strip() if request.portal_name else None,
+            **common_kwargs,
+        )
+    elif isinstance(request, PlaceFavoritePortalItemRequest):
+        if not request.favorite_portal_id:
+            raise HTTPException(status_code=400, detail="favorite_portal_id is required for favorite portal items")
+        if request.favorite_portal_latitude is None or request.favorite_portal_longitude is None:
+            raise HTTPException(status_code=400, detail="favorite portal coordinates are required for favorite portal items")
+        content_upload_path = upload_path or request.content_upload_path
+        if content_upload_path:
+            _validate_upload_path(content_upload_path)
+        item = FavoritePortalItemDocument(
+            type=ItemType.FAVORITE_PORTAL_ITEM,
+            favorite_portal_id=request.favorite_portal_id,
+            favorite_portal_latitude=request.favorite_portal_latitude,
+            favorite_portal_longitude=request.favorite_portal_longitude,
+            favorite_portal_name=request.favorite_portal_name.strip() if request.favorite_portal_name else None,
+            content_name=request.content_name.strip() if request.content_name else None,
+            content_text=request.content_text,
+            content_url=request.content_url,
+            content_upload_path=content_upload_path,
+            **common_kwargs,
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported item type")
+
     storage.save_item(item)
     storage.add_item_to_cell(root_id=root_id, cell_id=cell_id, item_id=item.id)
+    return item
+
+
+@app.post("/api/dimensions/{root_id}/items")
+def place_item(root_id: str, request: PlaceItemRequest) -> dict:
+    _validate_accuracy(request.accuracy_meters)
+
+    if request.type == ItemType.PORTAL_MARKER:
+        _validate_portal_spacing(root_id, request.latitude, request.longitude)
+
+    item = _create_item_from_request(root_id, request)
     return item.model_dump(mode="json")
 
 
@@ -187,6 +231,21 @@ def pick_up_item(
     storage.delete_item(item_id)
 
     return {"deleted": item_id}
+
+
+@app.post("/api/dimensions/{root_id}/items/{item_id}/visit-counter")
+def increment_visit_counter(root_id: str, item_id: str) -> dict:
+    item = storage.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.dimension_root_id != root_id:
+        raise HTTPException(status_code=403, detail="Item does not belong to this dimension")
+    if item.type != ItemType.VISIT_COUNTER:
+        raise HTTPException(status_code=400, detail="Only visit counters can be incremented")
+
+    item.visit_count += 1
+    storage.save_item(item)
+    return item.model_dump(mode="json")
 
 
 @app.patch("/api/dimensions/{root_id}/items/{item_id}/portal-name")
@@ -282,14 +341,16 @@ async def update_portal_details(
     return item.model_dump(mode="json")
 
 
+@app.post("/api/dimensions/{root_id}/media")
 @app.post("/api/dimensions/{root_id}/photos")
-async def place_photo(
+async def place_media(
     root_id: str,
     owner: str = Form(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
     accuracy_meters: float | None = Form(default=None),
-    item_type: ItemType = Form(default=ItemType.PHOTOGRAPH),
+    item_type: ItemType = Form(default=ItemType.MEDIA),
+    content_name: str | None = Form(default=None),
     content_text: str | None = Form(default=None),
     content_url: HttpUrl | None = Form(default=None),
     favorite_portal_id: str | None = Form(default=None),
@@ -300,8 +361,8 @@ async def place_photo(
 ) -> dict:
     _validate_accuracy(accuracy_meters)
 
-    if item_type not in (ItemType.PHOTOGRAPH, ItemType.FAVORITE_PORTAL_ITEM):
-        raise HTTPException(status_code=400, detail="Multipart upload only supports photograph and favorite portal items")
+    if item_type not in (ItemType.MEDIA, ItemType.FAVORITE_PORTAL_ITEM):
+        raise HTTPException(status_code=400, detail="Multipart upload only supports media and favorite portal items")
     if item_type == ItemType.FAVORITE_PORTAL_ITEM:
         if not favorite_portal_id:
             raise HTTPException(status_code=400, detail="favorite_portal_id is required for favorite portal items")
@@ -322,22 +383,39 @@ async def place_photo(
         if tmp_path.exists():
             tmp_path.unlink()
 
-    item = ItemDocument(
-        id=str(uuid.uuid4()),
-        type=item_type,
-        owner=owner,
-        latitude=latitude,
-        longitude=longitude,
-        accuracy_meters=accuracy_meters,
-        favorite_portal_id=favorite_portal_id if item_type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        favorite_portal_latitude=favorite_portal_latitude if item_type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        favorite_portal_longitude=favorite_portal_longitude if item_type == ItemType.FAVORITE_PORTAL_ITEM else None,
-        favorite_portal_name=favorite_portal_name.strip() if item_type == ItemType.FAVORITE_PORTAL_ITEM and favorite_portal_name else None,
-        content_text=content_text,
-        content_url=content_url,
-        content_upload_path=upload_path,
-        dimension_root_id=root_id,
-    )
+    if item_type == ItemType.MEDIA:
+        item = MediaItemDocument(
+            id=str(uuid.uuid4()),
+            type=item_type,
+            owner=owner,
+            latitude=latitude,
+            longitude=longitude,
+            accuracy_meters=accuracy_meters,
+            content_name=content_name.strip() if content_name else None,
+            content_text=content_text,
+            content_url=content_url,
+            content_upload_path=upload_path,
+            dimension_root_id=root_id,
+        )
+    else:
+        item = FavoritePortalItemDocument(
+            id=str(uuid.uuid4()),
+            type=item_type,
+            owner=owner,
+            latitude=latitude,
+            longitude=longitude,
+            accuracy_meters=accuracy_meters,
+            favorite_portal_id=favorite_portal_id,
+            favorite_portal_latitude=favorite_portal_latitude,
+            favorite_portal_longitude=favorite_portal_longitude,
+            favorite_portal_name=favorite_portal_name.strip() if favorite_portal_name else None,
+            content_name=content_name.strip() if content_name else None,
+            content_text=content_text,
+            content_url=content_url,
+            content_upload_path=upload_path,
+            dimension_root_id=root_id,
+        )
+
     storage.save_item(item)
     storage.add_item_to_cell(root_id=root_id, cell_id=cell_id, item_id=item.id)
     return item.model_dump(mode="json")
@@ -351,10 +429,35 @@ def get_cell_item_ids(root_id: str, cell_id: str) -> dict:
     return {"item_ids": list(cell.get("item_ids", []))}
 
 
-app.mount("/uploads", StaticFiles(directory=config.UPLOADS_DIR), name="uploads")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+class CacheControlStaticFiles(StaticFiles):
+    def __init__(self, *args, cache_control: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cache_control = cache_control
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers.setdefault("Cache-Control", self.cache_control)
+        return response
+
+
+app.mount(
+    "/uploads",
+    CacheControlStaticFiles(directory=config.UPLOADS_DIR, cache_control="public, max-age=31536000, immutable"),
+    name="uploads",
+)
+app.mount(
+    "/static",
+    CacheControlStaticFiles(directory="app/static", cache_control="public, max-age=31536000, immutable"),
+    name="static",
+)
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse("app/static/index.html")
+def index() -> HTMLResponse:
+    html = Path("app/static/index.html").read_text(encoding="utf-8").replace("__ASSET_VERSION__", ASSET_VERSION)
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": "public, max-age=300, stale-while-revalidate=86400"},
+    )

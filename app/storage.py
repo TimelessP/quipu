@@ -7,7 +7,27 @@ from pathlib import Path
 from typing import Any
 
 from app import config
-from app.models import ItemDocument
+from app.models import (
+    FavoritePortalItemDocument,
+    ItemDocument,
+    ItemType,
+    MediaItemDocument,
+    PortalMarkerItemDocument,
+    VisitCounterItemDocument,
+)
+
+
+def _parse_item_document(payload: dict[str, Any]) -> ItemDocument:
+    item_type = payload.get("type")
+    if item_type == ItemType.MEDIA.value:
+        return MediaItemDocument.model_validate(payload)
+    if item_type == ItemType.VISIT_COUNTER.value:
+        return VisitCounterItemDocument.model_validate(payload)
+    if item_type == ItemType.PORTAL_MARKER.value:
+        return PortalMarkerItemDocument.model_validate(payload)
+    if item_type == ItemType.FAVORITE_PORTAL_ITEM.value:
+        return FavoritePortalItemDocument.model_validate(payload)
+    return ItemDocument.model_validate(payload)
 
 
 class FileStorage:
@@ -45,7 +65,7 @@ class FileStorage:
         payload = self._read_json(config.ITEMS_DIR / f"{item_id}.json")
         if payload is None:
             return None
-        return ItemDocument.model_validate(payload)
+        return _parse_item_document(payload)
 
     def save_item(self, item: ItemDocument) -> None:
         self._write_json(config.ITEMS_DIR / f"{item.id}.json", item.model_dump(mode="json"))
@@ -100,7 +120,7 @@ class FileStorage:
             payload = self._read_json(item_file)
             if payload is None:
                 continue
-            item = ItemDocument.model_validate(payload)
+            item = _parse_item_document(payload)
             if item.dimension_root_id == root_id:
                 items.append(item)
         return items

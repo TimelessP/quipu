@@ -36,8 +36,8 @@
   --map-anchor: #ff4d00;
   --map-portal: #ff2bd6;
   --map-favorite: #244637;
-  --map-photo: #ff8a00;
-  --map-letter: #0073ff;
+  --map-media: #ff8a00;
+  --map-visit-counter: #0073ff;
   --portal-line: #050505;
   --map-tiles-filter: none;
   --leaflet-control-bg: #ffffff;
@@ -95,8 +95,8 @@
   --map-anchor: #ff4d00;
   --map-portal: #ff2bd6;
   --map-favorite: #27f4ff;
-  --map-photo: #ff8a00;
-  --map-letter: #0073ff;
+  --map-media: #ff8a00;
+  --map-visit-counter: #0073ff;
   --portal-line: #ff43d0;
   --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
   --leaflet-control-bg: rgba(3, 3, 3, 0.98);
@@ -155,8 +155,8 @@
     --map-anchor: #ff4d00;
     --map-portal: #ff2bd6;
     --map-favorite: #27f4ff;
-    --map-photo: #ff8a00;
-    --map-letter: #0073ff;
+    --map-media: #ff8a00;
+    --map-visit-counter: #0073ff;
     --portal-line: #ff43d0;
     --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
     --leaflet-control-bg: rgba(3, 3, 3, 0.98);
@@ -665,12 +665,12 @@ h2 {
   background: color-mix(in srgb, var(--panel) 78%, var(--bg) 22%);
 }
 
-.item-type-badge--letter {
-  background: color-mix(in srgb, var(--map-letter) 18%, var(--panel) 82%);
+.item-type-badge--media {
+  background: color-mix(in srgb, var(--map-media) 20%, var(--panel) 80%);
 }
 
-.item-type-badge--photo {
-  background: color-mix(in srgb, var(--map-photo) 20%, var(--panel) 80%);
+.item-type-badge--counter {
+  background: color-mix(in srgb, var(--map-visit-counter) 18%, var(--panel) 82%);
 }
 
 .item-type-badge--favorite {
@@ -1215,6 +1215,11 @@ button:focus-visible {
   margin-bottom: 0.45rem;
 }
 
+.inventory-item .inventory-name-input {
+  width: 100%;
+  margin-bottom: 0.45rem;
+}
+
 .inventory-item .inventory-textarea {
   width: 100%;
   resize: none;
@@ -1231,6 +1236,21 @@ button:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
   margin-top: 0.45rem;
+}
+
+.visit-counter-card {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--map-visit-counter) 14%, var(--panel) 86%);
+  border: 1px solid color-mix(in srgb, var(--map-visit-counter) 36%, var(--border) 64%);
+}
+
+.visit-counter-count {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .inventory-actions button {
