@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
+import secrets
 import tempfile
 import uuid
 from pathlib import Path
 
 import h3
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,19 +32,80 @@ from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260605-2"
+ASSET_VERSION = "20260605-12"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=config.CORS_ALLOW_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+_img_src_tokens = ["'self'", "data:", "blob:", *config.CSP_IMG_EXTRA_SOURCES]
+
+
+def _normalize_csp_script_source(token: str) -> str:
+    source = token.strip()
+    if not source:
+        return source
+    if source.startswith("'") and source.endswith("'"):
+        return source
+    if source.startswith(("sha256-", "sha384-", "sha512-")):
+        return f"'{source}'"
+    return source
+
+
+_script_src_tokens = ["'self'", *[_normalize_csp_script_source(token) for token in config.CSP_SCRIPT_HASHES]]
+
+def _build_security_csp_policy(script_nonce: str | None = None) -> str:
+    script_tokens = list(_script_src_tokens)
+    if script_nonce:
+        script_tokens.append(f"'nonce-{script_nonce}'")
+
+    return "; ".join(
+        [
+            "default-src 'self'",
+            "base-uri 'self'",
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+            "form-action 'self'",
+            f"script-src {' '.join(script_tokens)}",
+            "style-src 'self' 'unsafe-inline'",
+            f"img-src {' '.join(_img_src_tokens)}",
+            "font-src 'self' data:",
+            "connect-src 'self'",
+            "worker-src 'self' blob:",
+            "manifest-src 'self'",
+            "upgrade-insecure-requests",
+        ]
+    )
+
+
+def _generate_csp_nonce() -> str:
+    return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    request.state.csp_nonce = _generate_csp_nonce()
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(self), camera=(), microphone=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    csp_policy = _build_security_csp_policy(getattr(request.state, "csp_nonce", None))
+    csp_header_name = "Content-Security-Policy-Report-Only" if config.CSP_REPORT_ONLY else "Content-Security-Policy"
+    response.headers.setdefault(csp_header_name, csp_policy)
+    return response
+
 storage = FileStorage()
 MIN_PORTAL_SPACING_METERS = 8
-PORTAL_NAME_RANGE_METERS = 30
+AREA_OF_EFFECT_RADIUS_METERS = config.AREA_OF_EFFECT_RADIUS_METERS
+PORTAL_NAME_RANGE_METERS = AREA_OF_EFFECT_RADIUS_METERS
 PORTAL_INTERACTION_RANGE_METERS = PORTAL_NAME_RANGE_METERS
 PORTAL_REMOVE_RANGE_METERS = PORTAL_INTERACTION_RANGE_METERS
 
@@ -455,8 +518,14 @@ app.mount(
 
 
 @app.get("/")
-def index() -> HTMLResponse:
-    html = Path("app/static/index.html").read_text(encoding="utf-8").replace("__ASSET_VERSION__", ASSET_VERSION)
+def index(request: Request) -> HTMLResponse:
+    csp_nonce = getattr(request.state, "csp_nonce", "")
+    html = (
+        Path("app/static/index.html")
+        .read_text(encoding="utf-8")
+        .replace("__ASSET_VERSION__", ASSET_VERSION)
+        .replace("__CSP_NONCE__", csp_nonce)
+    )
     return HTMLResponse(
         html,
         headers={"Cache-Control": "public, max-age=300, stale-while-revalidate=86400"},

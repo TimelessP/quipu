@@ -42,9 +42,9 @@ class VisitCounterItemDocument(ItemDocument):
     visit_count: int = Field(default=0, ge=0)
 
 
-class PortalMarkerItemDocument(ItemDocument):
+class PortalMarkerItemDocument(ContentItemDocument):
     type: Literal[ItemType.PORTAL_MARKER]  # pyright: ignore[reportIncompatibleVariableOverride]
-    portal_name: str | None = None
+    portal_name: str | None = Field(default=None, max_length=128)
 
 
 class FavoritePortalItemDocument(ContentItemDocument):

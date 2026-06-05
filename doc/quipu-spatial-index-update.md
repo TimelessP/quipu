@@ -87,4 +87,4 @@ Cons:
 
 ## Resolution note
 
-`H3_RESOLUTION=12` is currently chosen as a practical default for a ~30m gameplay radius. If gameplay radius changes substantially, resolution can be revisited and tuned.
+`H3_RESOLUTION=12` is currently chosen as a practical default for a ~15m gameplay radius. If gameplay radius changes substantially, resolution can be revisited and tuned.

@@ -78,6 +78,7 @@ bash scripts/named-tunnel.sh status
 bash scripts/named-tunnel.sh restart
 bash scripts/named-tunnel.sh stop
 bash scripts/named-tunnel.sh logs
+bash scripts/named-tunnel.sh harden
 ```
 
 The script downloads `cloudflared` automatically (no account needed) and prints
@@ -87,11 +88,55 @@ The URL changes each session; no self-signed certificates are involved.
 `scripts/serve.sh` does not manage tunnel startup/shutdown; use one of the tunnel
 scripts above explicitly.
 
+Named tunnel hardening automation (optional):
+
+- Provide Cloudflare API credentials, then run hardening:
+
+```bash
+export QUIPU_CF_API_TOKEN=your_cloudflare_api_token
+export QUIPU_CF_ZONE_ID=your_cloudflare_zone_id
+bash scripts/named-tunnel.sh harden
+```
+
+- The command attempts to disable common script-injection features (Rocket Loader,
+	and verifies whether `/cdn-cgi/challenge-platform` injection is still present.
+- Bot challenge/JavaScript detection controls are currently dashboard-managed per
+	host/path; the script prints the exact manual follow-up when those are still enabled.
+
 ## API quick checks
 
 ```bash
 curl http://localhost:8000/health
 curl http://localhost:8000/api/dimensions/default
+```
+
+## CSP and Cloudflare tunnel hardening
+
+For stable and low-maintenance security, keep app CSP strict and stop edge-side
+inline script injection instead of hash-chasing rotating payloads.
+
+Recommended posture:
+
+- Keep `script-src 'self'` as the baseline policy.
+- Leave `QUIPU_CSP_SCRIPT_HASHES` unset by default.
+- Disable Cloudflare features that inject inline JS for this hostname:
+	- JavaScript Detections / JS Challenge (set skip rule for `quipu.timelessprototype.com`)
+	- Bot Fight mode challenge actions on this host/path
+	- Rocket Loader
+	- Zaraz (if enabled)
+
+If you need temporary compatibility while changing Cloudflare settings, set
+`QUIPU_CSP_SCRIPT_HASHES` explicitly to known hashes, then remove it once edge
+injection is disabled.
+
+Verification workflow:
+
+```bash
+# 1) Confirm CSP (expect script-src 'self' with no rotating hash maintenance)
+curl -sI https://quipu.timelessprototype.com/ | grep -i content-security-policy
+
+# 2) Check for Cloudflare challenge platform injection (should return nothing)
+curl -s https://quipu.timelessprototype.com/ | grep -i '/cdn-cgi/challenge-platform' || true
 ```
 
 ## Data layout
