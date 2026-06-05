@@ -78,7 +78,6 @@ bash scripts/named-tunnel.sh status
 bash scripts/named-tunnel.sh restart
 bash scripts/named-tunnel.sh stop
 bash scripts/named-tunnel.sh logs
-bash scripts/named-tunnel.sh harden
 ```
 
 The script downloads `cloudflared` automatically (no account needed) and prints
@@ -88,21 +87,6 @@ The URL changes each session; no self-signed certificates are involved.
 `scripts/serve.sh` does not manage tunnel startup/shutdown; use one of the tunnel
 scripts above explicitly.
 
-Named tunnel hardening automation (optional):
-
-- Provide Cloudflare API credentials, then run hardening:
-
-```bash
-export QUIPU_CF_API_TOKEN=your_cloudflare_api_token
-export QUIPU_CF_ZONE_ID=your_cloudflare_zone_id
-bash scripts/named-tunnel.sh harden
-```
-
-- The command attempts to disable common script-injection features (Rocket Loader,
-	and verifies whether `/cdn-cgi/challenge-platform` injection is still present.
-- Bot challenge/JavaScript detection controls are currently dashboard-managed per
-	host/path; the script prints the exact manual follow-up when those are still enabled.
-
 ## API quick checks
 
 ```bash
@@ -110,7 +94,7 @@ curl http://localhost:8000/health
 curl http://localhost:8000/api/dimensions/default
 ```
 
-## CSP and Cloudflare tunnel hardening
+## CSP and Cloudflare
 
 For stable and low-maintenance security, keep app CSP strict and stop edge-side
 inline script injection instead of hash-chasing rotating payloads.

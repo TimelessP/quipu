@@ -44,8 +44,6 @@
 #   QUIPU_TUNNEL_PID            PID file            default: /tmp/quipu-named-tunnel.pid
 #   QUIPU_TUNNEL_LOG            Log file            default: /tmp/quipu-named-tunnel.log
 #   QUIPU_STARTUP_TIMEOUT_SECONDS                   default: 20
-#   QUIPU_CF_API_TOKEN          Cloudflare API token (optional; for harden)
-#   QUIPU_CF_ZONE_ID            Cloudflare Zone ID  (optional; for harden)
 
 set -euo pipefail
 
@@ -62,8 +60,6 @@ LOCAL_URL="http://127.0.0.1:${PORT}"
 PID_FILE="${QUIPU_TUNNEL_PID:-/tmp/quipu-named-tunnel.pid}"
 LOG_FILE="${QUIPU_TUNNEL_LOG:-/tmp/quipu-named-tunnel.log}"
 STARTUP_TIMEOUT_SECONDS="${QUIPU_STARTUP_TIMEOUT_SECONDS:-20}"
-CF_API_TOKEN="${QUIPU_CF_API_TOKEN:-}"
-CF_ZONE_ID="${QUIPU_CF_ZONE_ID:-}"
 COMMAND="${1:-start}"
 
 mkdir -p "$BIN_DIR" "$CF_DIR"
@@ -169,128 +165,6 @@ is_running() {
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   [[ -n "$pid" ]] || return 1
   kill -0 "$pid" >/dev/null 2>&1
-}
-
-cf_api_request() {
-  local method="$1"
-  local endpoint="$2"
-  local payload="${3:-}"
-  local body_file http_code
-
-  body_file="$(mktemp)"
-  if [[ -n "$payload" ]]; then
-    http_code="$(curl -sS -X "$method" \
-      -H "Authorization: Bearer ${CF_API_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -d "$payload" \
-      -o "$body_file" \
-      -w "%{http_code}" \
-      "https://api.cloudflare.com/client/v4${endpoint}")"
-  else
-    http_code="$(curl -sS -X "$method" \
-      -H "Authorization: Bearer ${CF_API_TOKEN}" \
-      -o "$body_file" \
-      -w "%{http_code}" \
-      "https://api.cloudflare.com/client/v4${endpoint}")"
-  fi
-
-  if [[ "$http_code" != 2* ]]; then
-    echo "Cloudflare API request failed (${method} ${endpoint}, HTTP ${http_code})." >&2
-    cat "$body_file" >&2 || true
-    rm -f "$body_file"
-    return 1
-  fi
-
-  if ! python3 - "$body_file" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-if isinstance(data, dict) and data.get("success", True):
-    sys.exit(0)
-
-errors = data.get("errors") if isinstance(data, dict) else None
-if errors:
-    print("Cloudflare API error:", errors, file=sys.stderr)
-sys.exit(1)
-PY
-  then
-    rm -f "$body_file"
-    return 1
-  fi
-
-  rm -f "$body_file"
-  return 0
-}
-
-detect_challenge_injection() {
-  local url="$1"
-  curl -s "$url" | grep -qi '/cdn-cgi/challenge-platform'
-}
-
-resolve_cf_zone_id() {
-  local value="$1"
-
-  # Cloudflare Zone IDs are 32-char hex strings.
-  if [[ "$value" =~ ^[a-fA-F0-9]{32}$ ]]; then
-    printf '%s\n' "$value"
-    return 0
-  fi
-
-  local name result_file http_code
-  name="$value"
-  result_file="$(mktemp)"
-  http_code="$(curl -sS \
-    -H "Authorization: Bearer ${CF_API_TOKEN}" \
-    -o "$result_file" \
-    -w "%{http_code}" \
-    "https://api.cloudflare.com/client/v4/zones?name=${name}&status=active&per_page=1")"
-
-  if [[ "$http_code" != 2* ]]; then
-    echo "ERROR: Failed to resolve zone ID for '${name}' (HTTP ${http_code})." >&2
-    cat "$result_file" >&2 || true
-    rm -f "$result_file"
-    return 1
-  fi
-
-  if ! python3 - "$result_file" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-if not data.get("success"):
-    print(data, file=sys.stderr)
-    sys.exit(1)
-
-result = data.get("result") or []
-if not result:
-    print("", end="")
-    sys.exit(2)
-
-zone_id = result[0].get("id", "")
-if not zone_id:
-    sys.exit(3)
-
-print(zone_id, end="")
-PY
-  then
-    local status=$?
-    rm -f "$result_file"
-    if [[ "$status" -eq 2 ]]; then
-      echo "ERROR: No active zone found matching '${name}'." >&2
-    else
-      echo "ERROR: Could not parse zone ID for '${name}'." >&2
-    fi
-    return 1
-  fi
-
-  rm -f "$result_file"
 }
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -513,51 +387,6 @@ cmd_run() {
     run
 }
 
-cmd_harden() {
-  load_state
-
-  if [[ -z "$CF_API_TOKEN" || -z "$CF_ZONE_ID" ]]; then
-    echo "ERROR: QUIPU_CF_API_TOKEN and QUIPU_CF_ZONE_ID are required for harden." >&2
-    echo "Set both env vars and rerun: bash scripts/named-tunnel.sh harden" >&2
-    return 1
-  fi
-
-  if ! CF_ZONE_ID="$(resolve_cf_zone_id "$CF_ZONE_ID")"; then
-    echo "ERROR: QUIPU_CF_ZONE_ID must be a 32-char zone ID or a resolvable zone name." >&2
-    return 1
-  fi
-
-  echo "Applying Cloudflare hardening for ${HOSTNAME} ..."
-  echo "  Using zone ID: ${CF_ZONE_ID}"
-
-  if cf_api_request PATCH "/zones/${CF_ZONE_ID}/settings/rocket_loader" '{"value":"off"}'; then
-    echo "  OK: Rocket Loader disabled"
-  else
-    echo "  WARN: Unable to disable Rocket Loader via API" >&2
-  fi
-
-  # Cloudflare challenge behavior is currently configured through bot/rules products
-  # that do not expose a stable, zone-setting API toggle across plans. Keep this
-  # script focused on stable API operations and guide the remaining hardening step.
-  echo "  INFO: Bot challenge and JS detection controls require dashboard rule changes per host"
-
-  echo ""
-  echo "Verifying challenge injection state ..."
-  if detect_challenge_injection "https://${HOSTNAME}"; then
-    echo "  WARN: Cloudflare challenge platform script is still injected." >&2
-    echo ""
-    echo "Manual dashboard follow-up required:" >&2
-    echo "  1) Security -> Bots: disable JavaScript Detections / JS Challenges for ${HOSTNAME}" >&2
-    echo "  2) Security -> WAF -> Custom Rules: add host rule for ${HOSTNAME} with action Skip challenge-related checks" >&2
-    echo "  3) Rules -> Configuration Rules: ensure Rocket Loader is Off for ${HOSTNAME}" >&2
-    echo "  4) (Optional) Disable Zaraz for ${HOSTNAME} if enabled in your zone" >&2
-    return 2
-  fi
-
-  echo "  OK: No challenge-platform injection detected."
-  echo "Hardening complete."
-}
-
 cmd_teardown() {
   if [[ ! -f "$STATE_FILE" ]]; then
     echo "Nothing to tear down (no state file found)."
@@ -635,9 +464,6 @@ case "$COMMAND" in
   run)
     cmd_run
     ;;
-  harden)
-    cmd_harden
-    ;;
   teardown)
     cmd_teardown
     ;;
@@ -653,7 +479,6 @@ Commands:
   status    Show running state and URL
   logs      Tail the tunnel log
   run       Run in foreground (Ctrl-C to stop)
-  harden    Apply Cloudflare security hardening and verify no challenge injection
   teardown  Delete tunnel from Cloudflare and remove local config
 EOF
     exit 2
