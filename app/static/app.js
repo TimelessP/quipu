@@ -119,6 +119,7 @@ const portalNameInputEl = document.getElementById("portal-name-input");
 const portalContentTextEl = document.getElementById("portal-content-text");
 const portalContentUrlEl = document.getElementById("portal-content-url");
 const portalContentImageEl = document.getElementById("portal-content-image");
+const portalContentImageRemoveButtonEl = document.getElementById("portal-content-image-remove");
 const portalEditorTargetEl = document.getElementById("portal-editor-target");
 const portalLoadNearestButtonEl = document.getElementById("portal-load-nearest");
 const portalContentUrlPreviewEl = document.getElementById("portal-content-url-preview");
@@ -133,6 +134,7 @@ let persistClientStateTimerId = null;
 let followRestoreFrameId = null;
 let portalEditorTargetId = null;
 let portalEditorBaseline = null;
+let portalEditorImageClearRequested = false;
 let menuShareQrCode = null;
 // Two-level concurrency guard for loadNearby:
 // - loadNearbyFreshGeneration: incremented whenever a network fetch starts;
@@ -2417,6 +2419,19 @@ function getLinkedPortalItems() {
 }
 
 function mergeDisplayItems(nearbyItems, viewportPortalItems, linkedPortalItems = []) {
+  const mergePortalMarkerContent = (existing, incoming) => {
+    const hasContentText = Object.prototype.hasOwnProperty.call(incoming, "content_text");
+    const hasContentUrl = Object.prototype.hasOwnProperty.call(incoming, "content_url");
+    const hasContentUploadPath = Object.prototype.hasOwnProperty.call(incoming, "content_upload_path");
+    return {
+      ...existing,
+      ...incoming,
+      content_text: hasContentText ? (incoming.content_text ?? null) : (existing.content_text ?? null),
+      content_url: hasContentUrl ? (incoming.content_url ?? null) : (existing.content_url ?? null),
+      content_upload_path: hasContentUploadPath ? (incoming.content_upload_path ?? null) : (existing.content_upload_path ?? null),
+    };
+  };
+
   const merged = new Map();
   for (const item of nearbyItems) {
     merged.set(item.id, item);
@@ -2428,13 +2443,7 @@ function mergeDisplayItems(nearbyItems, viewportPortalItems, linkedPortalItems =
       continue;
     }
     if (item.type === "portal_marker" && existing.type === "portal_marker") {
-      merged.set(item.id, {
-        ...existing,
-        ...item,
-        content_text: item.content_text ?? existing.content_text ?? null,
-        content_url: item.content_url ?? existing.content_url ?? null,
-        content_upload_path: item.content_upload_path ?? existing.content_upload_path ?? null,
-      });
+      merged.set(item.id, mergePortalMarkerContent(existing, item));
       continue;
     }
     merged.set(item.id, item);
@@ -2446,13 +2455,7 @@ function mergeDisplayItems(nearbyItems, viewportPortalItems, linkedPortalItems =
       continue;
     }
     if (item.type === "portal_marker" && existing.type === "portal_marker") {
-      merged.set(item.id, {
-        ...existing,
-        ...item,
-        content_text: item.content_text ?? existing.content_text ?? null,
-        content_url: item.content_url ?? existing.content_url ?? null,
-        content_upload_path: item.content_upload_path ?? existing.content_upload_path ?? null,
-      });
+      merged.set(item.id, mergePortalMarkerContent(existing, item));
       continue;
     }
     merged.set(item.id, item);
@@ -2739,6 +2742,12 @@ function renderPortalModal() {
   if (clearButton) clearButton.disabled = !canClearCurrentPortalLink();
   if (removeNearbyButton) removeNearbyButton.disabled = !getPortalRemovalTarget();
 
+  const hasSelectedReplacementImage = Boolean(portalContentImageEl?.files?.length);
+  const hasCurrentPortalImage = Boolean(getPortalEditorTargetPortal()?.content_upload_path);
+  if (portalContentImageRemoveButtonEl) {
+    portalContentImageRemoveButtonEl.disabled = !hasSelectedReplacementImage && !hasCurrentPortalImage && !portalEditorImageClearRequested;
+  }
+
   const targetPortal = getPortalEditorTargetPortal();
   if (!targetPortal) {
     setPortalEditorTarget(null);
@@ -2883,7 +2892,9 @@ function renderNearbyPortalList() {
     const updateButton = document.createElement("button");
     updateButton.textContent = "Update";
     updateButton.addEventListener("click", () => {
-      setPortalEditorTarget(portal, { prefill: false });
+      if (portalEditorTargetId !== portal.id || !portalEditorBaseline) {
+        setPortalEditorTarget(portal, { prefill: false });
+      }
       updatePortalDetails(portal);
     });
     actions.appendChild(updateButton);
@@ -2917,13 +2928,15 @@ async function updatePortalDetails(portal) {
       portal_name: targetPortal.portal_name || "",
       content_text: targetPortal.content_text || "",
       content_url: targetPortal.content_url || "",
+      content_upload_path: targetPortal.content_upload_path || "",
     };
 
   const changedName = portalNameRaw !== baseline.portal_name;
   const changedText = portalTextRaw !== baseline.content_text;
   const changedUrl = portalUrlRaw !== baseline.content_url;
+  const changedImage = Boolean(portalImageFile) || (portalEditorImageClearRequested && Boolean(baseline.content_upload_path));
 
-  if (!changedName && !changedText && !changedUrl && !portalImageFile) {
+  if (!changedName && !changedText && !changedUrl && !changedImage) {
     notify("No portal changes to apply.", "info", 2200);
     return;
   }
@@ -2954,6 +2967,9 @@ async function updatePortalDetails(portal) {
       if (portalUrlRaw) form.append("content_url", portalUrlRaw);
       else form.append("content_url_clear", "true");
     }
+    if (portalEditorImageClearRequested && !portalImageFile) {
+      form.append("content_upload_clear", "true");
+    }
     if (portalImageFile) form.append("file", portalImageFile);
 
     const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${targetPortal.id}/portal-details`, {
@@ -2971,6 +2987,7 @@ async function updatePortalDetails(portal) {
     }
     const updated = await response.json();
     if (portalContentImageEl) portalContentImageEl.value = "";
+    portalEditorImageClearRequested = false;
     invalidatePortalCache(updated.id || targetPortal.id);
     updatePortalItemsInState(updated);
     setPortalEditorTarget(updated, { prefill: true });
@@ -3468,12 +3485,26 @@ function beginGeolocation() {
 async function placePortal() {
   if (!state.physicalPosition) return;
   const portalName = getPortalNameInputValue();
+  const portalTextRaw = portalContentTextEl?.value ?? "";
+  const portalUrlRaw = portalContentUrlEl?.value?.trim?.() ?? "";
+  const portalImageFile = portalContentImageEl?.files?.[0] || null;
 
   const tooClose = (getPhysicalNearbyPortals(MIN_PORTAL_SPACING_METERS) || []).length > 0;
 
   if (tooClose) {
     notify(`Portal too close to an existing portal. Keep at least ${MIN_PORTAL_SPACING_METERS}m spacing.`, "error");
     return;
+  }
+
+  if (portalUrlRaw) {
+    try {
+      // Keep Add Portal Here URL validation consistent with portal update flow.
+      // eslint-disable-next-line no-new
+      new URL(portalUrlRaw);
+    } catch {
+      notify("Portal URL must be a valid absolute URL.", "error");
+      return;
+    }
   }
 
   const body = {
@@ -3487,20 +3518,55 @@ async function placePortal() {
     body.portal_name = portalName;
   }
 
+  const portalText = portalTextRaw.trim();
+  if (portalText) {
+    body.content_text = portalTextRaw;
+  }
+  if (portalUrlRaw) {
+    body.content_url = portalUrlRaw;
+  }
+
   const url = `/api/dimensions/${state.dimensionRootId}/items`;
+  let created = null;
 
   try {
     if (!navigator.onLine) throw new Error("offline");
-    const created = await sendJson(url, body);
+    created = await sendJson(url, body);
+
+    if (portalImageFile && created?.id) {
+      const form = new FormData();
+      form.append("actor_latitude", String(state.physicalPosition.lat));
+      form.append("actor_longitude", String(state.physicalPosition.lng));
+      form.append("file", portalImageFile);
+
+      const updateResponse = await fetch(
+        `/api/dimensions/${state.dimensionRootId}/items/${created.id}/portal-details`,
+        {
+          method: "PATCH",
+          body: form,
+        }
+      );
+
+      if (!updateResponse.ok) {
+        throw new Error(await updateResponse.text());
+      }
+
+      created = await updateResponse.json();
+    }
+
     updatePortalItemsInState(created);
+    portalEditorImageClearRequested = false;
+    if (portalContentImageEl) portalContentImageEl.value = "";
   } catch (err) {
     const message = parseErrorMessage(err);
     if (message) {
       const timeoutMs = /accuracy/i.test(message) ? 5000 : 2600;
       notify(message, "error", timeoutMs);
     }
-    if (/^offline$/i.test(message) || /fetch/i.test(message)) {
+    if ((/^offline$/i.test(message) || /fetch/i.test(message)) && !portalImageFile) {
       queueWrite({ kind: "json", url, body });
+    } else if ((/^offline$/i.test(message) || /fetch/i.test(message)) && portalImageFile) {
+      notify("Portal image upload requires network connectivity.", "error", 3200);
     }
     return;
   }
@@ -3562,6 +3628,14 @@ function renderPortalEditorPreview(portal) {
   }
 
   if (portalContentImagePreviewEl) {
+    if (portalContentImageEl?.files?.length) {
+      return;
+    }
+    if (portalEditorImageClearRequested) {
+      portalContentImagePreviewEl.hidden = true;
+      portalContentImagePreviewEl.src = "";
+      return;
+    }
     const previewImage = portal.content_upload_path || "";
     if (previewImage) {
       portalContentImagePreviewEl.src = previewImage;
@@ -3577,9 +3651,19 @@ function setPortalEditorTarget(portal, { prefill = true } = {}) {
   if (!portal || portal.type !== "portal_marker") {
     portalEditorTargetId = null;
     portalEditorBaseline = null;
+    portalEditorImageClearRequested = false;
     renderPortalEditorPreview(null);
     return;
   }
+
+  if (portalEditorTargetId !== portal.id) {
+    portalEditorImageClearRequested = false;
+  }
+
+  const existingBaseline = (portalEditorBaseline && portalEditorBaseline.id === portal.id)
+    ? portalEditorBaseline
+    : null;
+  const hasIncomingContentUploadPath = Object.prototype.hasOwnProperty.call(portal, "content_upload_path");
 
   portalEditorTargetId = portal.id;
   portalEditorBaseline = {
@@ -3587,9 +3671,13 @@ function setPortalEditorTarget(portal, { prefill = true } = {}) {
     portal_name: portal.portal_name || "",
     content_text: portal.content_text || "",
     content_url: portal.content_url || "",
+    content_upload_path: hasIncomingContentUploadPath
+      ? (portal.content_upload_path || "")
+      : (existingBaseline?.content_upload_path || ""),
   };
 
   if (prefill) {
+    portalEditorImageClearRequested = false;
     if (portalNameInputEl) portalNameInputEl.value = portalEditorBaseline.portal_name;
     if (portalContentTextEl) portalContentTextEl.value = portalEditorBaseline.content_text;
     if (portalContentUrlEl) portalContentUrlEl.value = portalEditorBaseline.content_url;
@@ -3868,8 +3956,20 @@ portalContentImageEl?.addEventListener("change", () => {
     renderPortalEditorPreview(target);
     return;
   }
+  portalEditorImageClearRequested = false;
   portalContentImagePreviewEl.src = URL.createObjectURL(picked);
   portalContentImagePreviewEl.hidden = false;
+});
+
+portalContentImageRemoveButtonEl?.addEventListener("click", () => {
+  const target = getPortalEditorTargetPortal();
+  if (!target) {
+    notify("No nearby portal selected for image removal.", "error", 2200);
+    return;
+  }
+  portalEditorImageClearRequested = true;
+  if (portalContentImageEl) portalContentImageEl.value = "";
+  renderPortalEditorPreview(target);
 });
 
 document.getElementById("portal-clear-link")?.addEventListener("click", () => {

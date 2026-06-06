@@ -32,7 +32,7 @@ from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260605-12"
+ASSET_VERSION = "20260606-02"
 
 app.add_middleware(
     CORSMiddleware,
@@ -121,6 +121,12 @@ def _validate_accuracy(accuracy: float | None) -> None:
                 f"{config.GPS_ACCURACY_THRESHOLD_METERS:.1f}m"
             ),
         )
+
+
+def _parse_form_flag(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
 
 
 def _validate_portal_spacing(root_id: str, latitude: float, longitude: float) -> None:
@@ -345,7 +351,8 @@ async def update_portal_details(
     portal_name: str | None = Form(default=None),
     content_text: str | None = Form(default=None),
     content_url: HttpUrl | None = Form(default=None),
-    content_url_clear: bool = Form(default=False),
+    content_url_clear: str | None = Form(default=None),
+    content_upload_clear: str | None = Form(default=None),
     file: UploadFile | None = File(default=None),
 ) -> dict:
     item = storage.get_item(item_id)
@@ -366,12 +373,16 @@ async def update_portal_details(
             ),
         )
 
+    should_clear_content_url = _parse_form_flag(content_url_clear)
+    should_clear_content_upload = _parse_form_flag(content_upload_clear)
+
     has_portal_name = portal_name is not None and portal_name.strip() != ""
     has_content_text = content_text is not None and content_text.strip() != ""
-    has_content_url = content_url is not None or content_url_clear
+    has_content_url = content_url is not None or should_clear_content_url
     has_file = file is not None
+    has_content_upload_clear = should_clear_content_upload
 
-    if not (has_portal_name or has_content_text or has_content_url or has_file):
+    if not (has_portal_name or has_content_text or has_content_url or has_file or has_content_upload_clear):
         raise HTTPException(status_code=400, detail="Provide at least one portal field to update")
 
     if portal_name is not None and portal_name.strip() == "":
@@ -381,10 +392,13 @@ async def update_portal_details(
         item.portal_name = portal_name.strip()
     if content_text is not None:
         item.content_text = content_text.strip() if content_text.strip() else None
-    if content_url_clear:
+    if should_clear_content_url:
         item.content_url = None
     elif content_url is not None:
         item.content_url = content_url
+
+    if should_clear_content_upload:
+        item.content_upload_path = None
 
     if file is not None:
         suffix = Path(file.filename or "upload.bin").suffix
