@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import uuid
@@ -108,10 +109,30 @@ class FileStorage:
         return item
 
     def save_upload(self, src_path: Path, original_name: str) -> str:
-        safe_name = original_name.replace("/", "_").replace("..", "_")
-        filename = f"{uuid.uuid4()}-{safe_name}"
+        # Content-addressed storage prevents duplicate binaries from being stored.
+        hasher = hashlib.sha256()
+        with src_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+
+        suffix = Path(original_name).suffix.lower()
+        if suffix and not suffix[1:].isalnum():
+            suffix = ""
+        if len(suffix) > 10:
+            suffix = ""
+
+        # Reuse any existing object for this digest, regardless of extension,
+        # so duplicate binary uploads never create extra files.
+        for existing in sorted(config.UPLOADS_DIR.glob(f"{digest}*")):
+            name = existing.name
+            if name == digest or name.startswith(f"{digest}."):
+                return f"/uploads/{name}"
+
+        filename = f"{digest}{suffix}" if suffix else digest
         dest = config.UPLOADS_DIR / filename
-        shutil.copyfile(src_path, dest)
+        if not dest.exists():
+            shutil.copyfile(src_path, dest)
         return f"/uploads/{filename}"
 
     def iter_items_in_dimension(self, root_id: str) -> list[ItemDocument]:

@@ -32,7 +32,7 @@ from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260606-03"
+ASSET_VERSION = "20260606-06"
 
 app.add_middleware(
     CORSMiddleware,

@@ -228,6 +228,21 @@
         </form>
       </section>
 
+      <section id="image-viewer-modal" class="app-modal" aria-label="Image viewer" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2 id="image-viewer-title">Image</h2>
+          <button id="image-viewer-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div class="image-viewer-toolbar">
+          <button id="image-viewer-fit" type="button">Fit View</button>
+          <button id="image-viewer-zoom-out" type="button">-</button>
+          <button id="image-viewer-zoom-in" type="button">+</button>
+        </div>
+        <div id="image-viewer-stage" class="image-viewer-stage" aria-label="Pan and zoom image area">
+          <img id="image-viewer-image" class="image-viewer-image" alt="Expanded media" draggable="false" />
+        </div>
+      </section>
+
       <aside id="dev-menu" class="dev-menu is-collapsed" aria-label="Development controls">
         <section class="panel status-panel">
           <div class="panel-header">

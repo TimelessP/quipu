@@ -113,6 +113,14 @@ const itemAddUrlEl = document.getElementById("item-add-url");
 const itemAddPhotoEl = document.getElementById("item-add-photo");
 const settingsModalEl = document.getElementById("settings-modal");
 const aboutModalEl = document.getElementById("about-modal");
+const imageViewerModalEl = document.getElementById("image-viewer-modal");
+const imageViewerTitleEl = document.getElementById("image-viewer-title");
+const imageViewerCloseButtonEl = document.getElementById("image-viewer-close");
+const imageViewerFitButtonEl = document.getElementById("image-viewer-fit");
+const imageViewerZoomOutButtonEl = document.getElementById("image-viewer-zoom-out");
+const imageViewerZoomInButtonEl = document.getElementById("image-viewer-zoom-in");
+const imageViewerStageEl = document.getElementById("image-viewer-stage");
+const imageViewerImageEl = document.getElementById("image-viewer-image");
 const settingsThemeCycleButtonEl = document.getElementById("settings-theme-cycle");
 const settingsFollowPlayerButtonEl = document.getElementById("settings-follow-player");
 const portalNameInputEl = document.getElementById("portal-name-input");
@@ -136,6 +144,24 @@ let portalEditorTargetId = null;
 let portalEditorBaseline = null;
 let portalEditorImageClearRequested = false;
 let menuShareQrCode = null;
+let imageViewerScale = 1;
+let imageViewerTx = 0;
+let imageViewerTy = 0;
+let imageViewerMinScale = 0.1;
+let imageViewerMaxScale = 8;
+const imageViewerPointers = new Map();
+let imageViewerPanPointerId = null;
+let imageViewerDragStartX = 0;
+let imageViewerDragStartY = 0;
+let imageViewerDragOriginTx = 0;
+let imageViewerDragOriginTy = 0;
+let imageViewerPinchStartDistance = 0;
+let imageViewerPinchStartScale = 1;
+let imageViewerPinchStartTx = 0;
+let imageViewerPinchStartTy = 0;
+let imageViewerPinchMidX = 0;
+let imageViewerPinchMidY = 0;
+let imageViewerGestureStartScale = 1;
 // Two-level concurrency guard for loadNearby:
 // - loadNearbyFreshGeneration: incremented whenever a network fetch starts;
 //   only a newer network fetch supersedes an older one.
@@ -198,7 +224,7 @@ function getUiStackFromHistory(state = history.state) {
   if (!state || state.uiSessionId !== uiSessionId || !Array.isArray(state.uiStack)) {
     return [];
   }
-  return state.uiStack.filter((layer) => layer === "menu" || layer === "items" || layer === "portals" || layer === "debug" || layer === "settings" || layer === "about" || layer === "item-add");
+  return state.uiStack.filter((layer) => layer === "menu" || layer === "items" || layer === "portals" || layer === "debug" || layer === "settings" || layer === "about" || layer === "item-add" || layer === "image-viewer");
 }
 
 function getLayerElement(layerId) {
@@ -210,6 +236,7 @@ function getLayerElement(layerId) {
     case "settings": return settingsModalEl;
     case "about": return aboutModalEl;
     case "item-add": return itemAddModalEl;
+    case "image-viewer": return imageViewerModalEl;
     default: return null;
   }
 }
@@ -240,11 +267,11 @@ function syncUiStack(nextStack) {
   uiStack = [...nextStack];
 
   setLayerVisible("menu", uiStack.includes("menu"));
-  for (const layerId of ["items", "portals", "debug", "settings", "about", "item-add"]) {
+  for (const layerId of ["items", "portals", "debug", "settings", "about", "item-add", "image-viewer"]) {
     setLayerVisible(layerId, uiStack.includes(layerId));
   }
 
-  const hasModalLayer = ["items", "portals", "debug", "settings", "about", "item-add"].some((layerId) => uiStack.includes(layerId));
+  const hasModalLayer = ["items", "portals", "debug", "settings", "about", "item-add", "image-viewer"].some((layerId) => uiStack.includes(layerId));
   modalScrimEl?.classList.toggle("is-open", hasModalLayer);
   modalScrimEl?.setAttribute("aria-hidden", hasModalLayer ? "false" : "true");
 
@@ -812,7 +839,7 @@ function setPlayerActionsOpen(open) {
 }
 
 function getActiveModalEls() {
-  return [itemsModalEl, portalsModalEl, debugModalEl, itemAddModalEl].filter(Boolean);
+  return [itemsModalEl, portalsModalEl, debugModalEl, itemAddModalEl, imageViewerModalEl].filter(Boolean);
 }
 
 function closeAllModals() {
@@ -832,6 +859,7 @@ function openModal(modalEl) {
   else if (modalEl === settingsModalEl) openUiLayer("settings");
   else if (modalEl === aboutModalEl) openUiLayer("about");
   else if (modalEl === itemAddModalEl) openUiLayer("item-add");
+  else if (modalEl === imageViewerModalEl) openUiLayer("image-viewer");
 }
 
 function closeModal(modalEl) {
@@ -842,6 +870,76 @@ function closeModal(modalEl) {
   else if (modalEl === settingsModalEl) closeUiLayer("settings");
   else if (modalEl === aboutModalEl) closeUiLayer("about");
   else if (modalEl === itemAddModalEl) closeUiLayer("item-add");
+  else if (modalEl === imageViewerModalEl) closeUiLayer("image-viewer");
+}
+
+function clampImageViewerScale(nextScale) {
+  return Math.min(imageViewerMaxScale, Math.max(imageViewerMinScale, nextScale));
+}
+
+function renderImageViewerTransform() {
+  if (!imageViewerImageEl) return;
+  imageViewerImageEl.style.transform = `translate3d(${imageViewerTx}px, ${imageViewerTy}px, 0) scale(${imageViewerScale})`;
+}
+
+function fitImageViewerToStage() {
+  if (!imageViewerImageEl || !imageViewerStageEl) return;
+  const naturalWidth = imageViewerImageEl.naturalWidth;
+  const naturalHeight = imageViewerImageEl.naturalHeight;
+  const stageWidth = imageViewerStageEl.clientWidth;
+  const stageHeight = imageViewerStageEl.clientHeight;
+  if (!naturalWidth || !naturalHeight || !stageWidth || !stageHeight) return;
+
+  const fitScale = Math.min(stageWidth / naturalWidth, stageHeight / naturalHeight);
+  imageViewerMinScale = Math.max(0.02, fitScale * 0.2);
+  imageViewerScale = clampImageViewerScale(fitScale);
+  imageViewerTx = (stageWidth - (naturalWidth * imageViewerScale)) / 2;
+  imageViewerTy = (stageHeight - (naturalHeight * imageViewerScale)) / 2;
+  renderImageViewerTransform();
+}
+
+function zoomImageViewerBy(multiplier, originX = null, originY = null) {
+  if (!imageViewerStageEl || !imageViewerImageEl) return;
+  const rect = imageViewerStageEl.getBoundingClientRect();
+  const px = (originX ?? (rect.left + (rect.width / 2))) - rect.left;
+  const py = (originY ?? (rect.top + (rect.height / 2))) - rect.top;
+
+  const oldScale = imageViewerScale;
+  const nextScale = clampImageViewerScale(oldScale * multiplier);
+  if (nextScale === oldScale) return;
+  const ratio = nextScale / oldScale;
+
+  imageViewerTx = px - ((px - imageViewerTx) * ratio);
+  imageViewerTy = py - ((py - imageViewerTy) * ratio);
+  imageViewerScale = nextScale;
+  renderImageViewerTransform();
+}
+
+function openImageViewer(src, title = "Image") {
+  if (!src || !imageViewerImageEl || !imageViewerModalEl) return;
+  if (imageViewerTitleEl) imageViewerTitleEl.textContent = title;
+  imageViewerImageEl.src = src;
+  imageViewerImageEl.alt = title;
+  openUiLayer("image-viewer");
+
+  if (imageViewerImageEl.complete && imageViewerImageEl.naturalWidth) {
+    requestAnimationFrame(() => fitImageViewerToStage());
+  } else {
+    imageViewerImageEl.addEventListener("load", () => requestAnimationFrame(() => fitImageViewerToStage()), { once: true });
+  }
+}
+
+function makeThumbnailOpenable(imageEl, src, title) {
+  if (!imageEl || !src) return;
+  imageEl.setAttribute("role", "button");
+  imageEl.tabIndex = 0;
+  imageEl.title = "Open image viewer";
+  imageEl.addEventListener("click", () => openImageViewer(src, title));
+  imageEl.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openImageViewer(src, title);
+  });
 }
 
 function loadPortalFavorites() {
@@ -2034,6 +2132,8 @@ async function replayQueue() {
         await sendJson(payload.url, payload.body);
       } else if (payload.kind === "photo") {
         await sendQueuedPhoto(payload);
+      } else if (payload.kind === "portal") {
+        await sendQueuedPortal(payload);
       } else {
         throw new Error("Unknown queue payload kind");
       }
@@ -2051,6 +2151,36 @@ async function sendQueuedPhoto(payload) {
   form.append("longitude", String(payload.longitude));
   form.append("accuracy_meters", String(payload.accuracy_meters));
   form.append("file", dataUrlToFile(payload.fileDataUrl, payload.fileName, payload.fileType));
+
+  const response = await fetch(payload.url, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+}
+
+async function sendQueuedPortal(payload) {
+  const form = new FormData();
+  form.append("owner", payload.owner);
+  form.append("latitude", String(payload.latitude));
+  form.append("longitude", String(payload.longitude));
+  form.append("accuracy_meters", String(payload.accuracy_meters));
+  if (payload.portal_name) form.append("portal_name", payload.portal_name);
+  if (payload.content_text) form.append("content_text", payload.content_text);
+  if (payload.content_url) form.append("content_url", payload.content_url);
+  if (payload.fileDataUrl) {
+    form.append(
+      "file",
+      dataUrlToFile(
+        payload.fileDataUrl,
+        payload.fileName || `portal-${Date.now()}.bin`,
+        payload.fileType || "application/octet-stream"
+      )
+    );
+  }
 
   const response = await fetch(payload.url, {
     method: "POST",
@@ -2682,6 +2812,7 @@ function createPortalListSummary({
     thumb.alt = "Portal thumbnail";
     thumb.src = imageUrl;
     thumb.loading = "lazy";
+    makeThumbnailOpenable(thumb, imageUrl, portalName || "Portal image");
     thumbWrap.appendChild(thumb);
   } else {
     const placeholder = document.createElement("div");
@@ -3128,6 +3259,7 @@ function renderItemList(items) {
     const photoEl = li.querySelector(".item-photo");
     if (photoEl) {
       photoEl.addEventListener("error", () => reconcileMissingItem(item.id), { once: true });
+      makeThumbnailOpenable(photoEl, item.content_upload_path, getItemCardTitle(item));
     }
 
     const actions = document.createElement("div");
@@ -3534,12 +3666,36 @@ async function placePortal() {
     if (portalContentImageEl) portalContentImageEl.value = "";
   } catch (err) {
     const message = parseErrorMessage(err);
+    const isOfflineLike = /^offline$/i.test(message) || /fetch/i.test(message);
+    if (isOfflineLike) {
+      const queuedPayload = {
+        kind: "portal",
+        url,
+        owner: state.ownerId,
+        latitude: state.physicalPosition.lat,
+        longitude: state.physicalPosition.lng,
+        accuracy_meters: getPlacementAccuracyMeters(),
+        portal_name: portalName || null,
+        content_text: portalText || null,
+        content_url: portalUrlRaw || null,
+      };
+
+      if (portalImageFile) {
+        queuedPayload.fileDataUrl = await fileToDataUrl(portalImageFile);
+        queuedPayload.fileName = portalImageFile.name || `portal-${Date.now()}.bin`;
+        queuedPayload.fileType = portalImageFile.type || "application/octet-stream";
+      }
+
+      queueWrite(queuedPayload);
+      portalEditorImageClearRequested = false;
+      if (portalContentImageEl) portalContentImageEl.value = "";
+      notify("Portal add queued and will sync when back online.", "info", 3200);
+      return;
+    }
+
     if (message) {
       const timeoutMs = /accuracy/i.test(message) ? 5000 : 2600;
       notify(message, "error", timeoutMs);
-    }
-    if (/^offline$/i.test(message) || /fetch/i.test(message)) {
-      notify("Adding portals from this modal requires network connectivity.", "error", 3200);
     }
     return;
   }
@@ -3881,9 +4037,121 @@ modalScrimEl?.addEventListener("click", () => {
   closeTopUiLayer();
 });
 
-for (const [id, modal] of [["items-modal-close", itemsModalEl], ["portals-modal-close", portalsModalEl], ["debug-modal-close", debugModalEl], ["settings-modal-close", settingsModalEl], ["about-modal-close", aboutModalEl], ["item-add-close", itemAddModalEl]]) {
+for (const [id, modal] of [["items-modal-close", itemsModalEl], ["portals-modal-close", portalsModalEl], ["debug-modal-close", debugModalEl], ["settings-modal-close", settingsModalEl], ["about-modal-close", aboutModalEl], ["item-add-close", itemAddModalEl], ["image-viewer-close", imageViewerModalEl]]) {
   document.getElementById(id)?.addEventListener("click", () => closeModal(modal));
 }
+
+imageViewerCloseButtonEl?.addEventListener("click", () => closeModal(imageViewerModalEl));
+imageViewerFitButtonEl?.addEventListener("click", fitImageViewerToStage);
+imageViewerZoomInButtonEl?.addEventListener("click", () => zoomImageViewerBy(1.2));
+imageViewerZoomOutButtonEl?.addEventListener("click", () => zoomImageViewerBy(1 / 1.2));
+
+imageViewerStageEl?.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const multiplier = event.deltaY < 0 ? 1.1 : (1 / 1.1);
+  zoomImageViewerBy(multiplier, event.clientX, event.clientY);
+}, { passive: false });
+
+imageViewerStageEl?.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 && event.pointerType === "mouse") return;
+  imageViewerPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  imageViewerStageEl.setPointerCapture(event.pointerId);
+
+  if (imageViewerPointers.size === 1) {
+    imageViewerPanPointerId = event.pointerId;
+    imageViewerDragStartX = event.clientX;
+    imageViewerDragStartY = event.clientY;
+    imageViewerDragOriginTx = imageViewerTx;
+    imageViewerDragOriginTy = imageViewerTy;
+    imageViewerStageEl.classList.add("is-dragging");
+  } else if (imageViewerPointers.size === 2) {
+    const points = Array.from(imageViewerPointers.values());
+    const dx = points[1].x - points[0].x;
+    const dy = points[1].y - points[0].y;
+    imageViewerPinchStartDistance = Math.hypot(dx, dy) || 1;
+    imageViewerPinchStartScale = imageViewerScale;
+    imageViewerPinchStartTx = imageViewerTx;
+    imageViewerPinchStartTy = imageViewerTy;
+    imageViewerPinchMidX = (points[0].x + points[1].x) / 2;
+    imageViewerPinchMidY = (points[0].y + points[1].y) / 2;
+    imageViewerPanPointerId = null;
+    imageViewerStageEl.classList.remove("is-dragging");
+  }
+});
+
+imageViewerStageEl?.addEventListener("pointermove", (event) => {
+  if (!imageViewerPointers.has(event.pointerId)) return;
+  imageViewerPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+  if (imageViewerPointers.size >= 2) {
+    const points = Array.from(imageViewerPointers.values());
+    const dx = points[1].x - points[0].x;
+    const dy = points[1].y - points[0].y;
+    const nextDistance = Math.hypot(dx, dy) || 1;
+    const scaleMultiplier = nextDistance / imageViewerPinchStartDistance;
+
+    const rect = imageViewerStageEl.getBoundingClientRect();
+    const px = imageViewerPinchMidX - rect.left;
+    const py = imageViewerPinchMidY - rect.top;
+
+    const nextScale = clampImageViewerScale(imageViewerPinchStartScale * scaleMultiplier);
+    const ratio = nextScale / imageViewerPinchStartScale;
+    imageViewerTx = px - ((px - imageViewerPinchStartTx) * ratio);
+    imageViewerTy = py - ((py - imageViewerPinchStartTy) * ratio);
+    imageViewerScale = nextScale;
+    renderImageViewerTransform();
+    return;
+  }
+
+  if (imageViewerPanPointerId !== event.pointerId) return;
+  imageViewerTx = imageViewerDragOriginTx + (event.clientX - imageViewerDragStartX);
+  imageViewerTy = imageViewerDragOriginTy + (event.clientY - imageViewerDragStartY);
+  renderImageViewerTransform();
+});
+
+const stopImageViewerDrag = (event) => {
+  if (!imageViewerPointers.has(event.pointerId)) return;
+  imageViewerPointers.delete(event.pointerId);
+  if (imageViewerPanPointerId === event.pointerId) {
+    imageViewerPanPointerId = null;
+  }
+
+  if (imageViewerPointers.size === 1) {
+    const [[remainingPointerId, point]] = Array.from(imageViewerPointers.entries());
+    imageViewerPanPointerId = remainingPointerId;
+    imageViewerDragStartX = point.x;
+    imageViewerDragStartY = point.y;
+    imageViewerDragOriginTx = imageViewerTx;
+    imageViewerDragOriginTy = imageViewerTy;
+    imageViewerStageEl?.classList.add("is-dragging");
+    return;
+  }
+
+  imageViewerStageEl?.classList.remove("is-dragging");
+};
+
+imageViewerStageEl?.addEventListener("pointerup", stopImageViewerDrag);
+imageViewerStageEl?.addEventListener("pointercancel", stopImageViewerDrag);
+
+imageViewerStageEl?.addEventListener("gesturestart", (event) => {
+  event.preventDefault();
+  imageViewerGestureStartScale = imageViewerScale;
+}, { passive: false });
+
+imageViewerStageEl?.addEventListener("gesturechange", (event) => {
+  event.preventDefault();
+  const multiplier = Number.isFinite(event.scale) ? event.scale : 1;
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return;
+  const rect = imageViewerStageEl.getBoundingClientRect();
+  const px = event.clientX - rect.left;
+  const py = event.clientY - rect.top;
+  const nextScale = clampImageViewerScale(imageViewerGestureStartScale * multiplier);
+  const ratio = nextScale / imageViewerScale;
+  imageViewerTx = px - ((px - imageViewerTx) * ratio);
+  imageViewerTy = py - ((py - imageViewerTy) * ratio);
+  imageViewerScale = nextScale;
+  renderImageViewerTransform();
+}, { passive: false });
 
 document.getElementById("item-add-cancel")?.addEventListener("click", () => {
   closeTopUiLayer();
@@ -4451,12 +4719,13 @@ function renderInventory() {
 
       if (item.content_upload_path || item.content_data_url) {
         const img = document.createElement("img");
+        img.className = "item-photo item-photo--inventory";
         img.src = item.content_upload_path || item.content_data_url;
         img.alt = "media";
-        img.style.cssText = "max-width:100%; border-radius:8px; display:block; margin:0.25rem 0;";
         if (item.content_upload_path) {
           img.addEventListener("error", () => reconcileMissingItem(item.id), { once: true });
         }
+        makeThumbnailOpenable(img, item.content_upload_path || item.content_data_url, getInventoryEntryTitle(item));
         li.appendChild(img);
       }
 
