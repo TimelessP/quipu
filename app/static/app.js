@@ -3507,52 +3507,27 @@ async function placePortal() {
     }
   }
 
-  const body = {
-    type: "portal_marker",
-    owner: state.ownerId,
-    latitude: state.physicalPosition.lat,
-    longitude: state.physicalPosition.lng,
-    accuracy_meters: getPlacementAccuracyMeters(),
-  };
-  if (portalName) {
-    body.portal_name = portalName;
-  }
-
   const portalText = portalTextRaw.trim();
-  if (portalText) {
-    body.content_text = portalTextRaw;
-  }
-  if (portalUrlRaw) {
-    body.content_url = portalUrlRaw;
-  }
-
-  const url = `/api/dimensions/${state.dimensionRootId}/items`;
+  const url = `/api/dimensions/${state.dimensionRootId}/portals`;
   let created = null;
 
   try {
     if (!navigator.onLine) throw new Error("offline");
-    created = await sendJson(url, body);
+    const form = new FormData();
+    form.append("owner", state.ownerId);
+    form.append("latitude", String(state.physicalPosition.lat));
+    form.append("longitude", String(state.physicalPosition.lng));
+    form.append("accuracy_meters", String(getPlacementAccuracyMeters()));
+    if (portalName) form.append("portal_name", portalName);
+    if (portalText) form.append("content_text", portalTextRaw);
+    if (portalUrlRaw) form.append("content_url", portalUrlRaw);
+    if (portalImageFile) form.append("file", portalImageFile);
 
-    if (portalImageFile && created?.id) {
-      const form = new FormData();
-      form.append("actor_latitude", String(state.physicalPosition.lat));
-      form.append("actor_longitude", String(state.physicalPosition.lng));
-      form.append("file", portalImageFile);
-
-      const updateResponse = await fetch(
-        `/api/dimensions/${state.dimensionRootId}/items/${created.id}/portal-details`,
-        {
-          method: "PATCH",
-          body: form,
-        }
-      );
-
-      if (!updateResponse.ok) {
-        throw new Error(await updateResponse.text());
-      }
-
-      created = await updateResponse.json();
+    const response = await fetch(url, { method: "POST", body: form });
+    if (!response.ok) {
+      throw new Error(await response.text());
     }
+    created = await response.json();
 
     updatePortalItemsInState(created);
     portalEditorImageClearRequested = false;
@@ -3563,10 +3538,8 @@ async function placePortal() {
       const timeoutMs = /accuracy/i.test(message) ? 5000 : 2600;
       notify(message, "error", timeoutMs);
     }
-    if ((/^offline$/i.test(message) || /fetch/i.test(message)) && !portalImageFile) {
-      queueWrite({ kind: "json", url, body });
-    } else if ((/^offline$/i.test(message) || /fetch/i.test(message)) && portalImageFile) {
-      notify("Portal image upload requires network connectivity.", "error", 3200);
+    if (/^offline$/i.test(message) || /fetch/i.test(message)) {
+      notify("Adding portals from this modal requires network connectivity.", "error", 3200);
     }
     return;
   }

@@ -32,7 +32,7 @@ from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260606-02"
+ASSET_VERSION = "20260606-03"
 
 app.add_middleware(
     CORSMiddleware,
@@ -219,9 +219,14 @@ def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_pa
             **common_kwargs,
         )
     elif isinstance(request, PlacePortalMarkerItemRequest):
+        if upload_path:
+            _validate_upload_path(upload_path)
         item = PortalMarkerItemDocument(
             type=ItemType.PORTAL_MARKER,
             portal_name=request.portal_name.strip() if request.portal_name else None,
+            content_text=request.content_text.strip() if request.content_text and request.content_text.strip() else None,
+            content_url=request.content_url,
+            content_upload_path=upload_path,
             **common_kwargs,
         )
     elif isinstance(request, PlaceFavoritePortalItemRequest):
@@ -260,6 +265,50 @@ def place_item(root_id: str, request: PlaceItemRequest) -> dict:
         _validate_portal_spacing(root_id, request.latitude, request.longitude)
 
     item = _create_item_from_request(root_id, request)
+    return item.model_dump(mode="json")
+
+
+@app.post("/api/dimensions/{root_id}/portals")
+async def place_portal_multipart(
+    root_id: str,
+    owner: str = Form(...),
+    latitude: float = Form(...),
+    longitude: float = Form(...),
+    accuracy_meters: float | None = Form(default=None),
+    portal_name: str | None = Form(default=None),
+    content_text: str | None = Form(default=None),
+    content_url: HttpUrl | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+) -> dict:
+    _validate_accuracy(accuracy_meters)
+    _validate_portal_spacing(root_id, latitude, longitude)
+
+    upload_path = None
+    if file is not None:
+        suffix = Path(file.filename or "upload.bin").suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            content = await file.read()
+            tmp.write(content)
+
+        try:
+            upload_path = storage.save_upload(tmp_path, file.filename or "upload.bin")
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    request = PlacePortalMarkerItemRequest(
+        type=ItemType.PORTAL_MARKER,
+        owner=owner,
+        latitude=latitude,
+        longitude=longitude,
+        accuracy_meters=accuracy_meters,
+        portal_name=portal_name.strip() if portal_name else None,
+        content_text=content_text,
+        content_url=content_url,
+    )
+
+    item = _create_item_from_request(root_id, request, upload_path=upload_path)
     return item.model_dump(mode="json")
 
 

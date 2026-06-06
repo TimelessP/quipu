@@ -78,6 +78,8 @@ class PlaceVisitCounterItemRequest(BasePlacementRequest):
 class PlacePortalMarkerItemRequest(BasePlacementRequest):
     type: Literal[ItemType.PORTAL_MARKER]
     portal_name: str | None = Field(default=None, max_length=128)
+    content_text: str | None = Field(default=None, max_length=5000)
+    content_url: HttpUrl | None = None
 
 
 class PlaceFavoritePortalItemRequest(BasePlacementRequest):
