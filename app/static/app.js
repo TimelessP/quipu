@@ -119,6 +119,7 @@ const imageViewerCloseButtonEl = document.getElementById("image-viewer-close");
 const imageViewerFitButtonEl = document.getElementById("image-viewer-fit");
 const imageViewerZoomOutButtonEl = document.getElementById("image-viewer-zoom-out");
 const imageViewerZoomInButtonEl = document.getElementById("image-viewer-zoom-in");
+const imageViewerDownloadButtonEl = document.getElementById("image-viewer-download");
 const imageViewerStageEl = document.getElementById("image-viewer-stage");
 const imageViewerImageEl = document.getElementById("image-viewer-image");
 const settingsThemeCycleButtonEl = document.getElementById("settings-theme-cycle");
@@ -927,6 +928,64 @@ function openImageViewer(src, title = "Image") {
   } else {
     imageViewerImageEl.addEventListener("load", () => requestAnimationFrame(() => fitImageViewerToStage()), { once: true });
   }
+}
+
+function sanitizeDownloadBaseName(value) {
+  if (typeof value !== "string") return "image";
+  const trimmed = value.trim();
+  if (!trimmed) return "image";
+  const cleaned = trimmed
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return cleaned || "image";
+}
+
+function detectImageExtensionFromSrc(src) {
+  if (typeof src !== "string" || !src) return "";
+  const dataUrlMatch = src.match(/^data:image\/([a-zA-Z0-9.+-]+);/);
+  if (dataUrlMatch) {
+    const mimeSubtype = dataUrlMatch[1].toLowerCase();
+    if (mimeSubtype === "jpeg") return ".jpg";
+    return `.${mimeSubtype}`;
+  }
+
+  try {
+    const parsed = new URL(src, window.location.origin);
+    const path = parsed.pathname || "";
+    const extensionMatch = path.match(/\.([a-zA-Z0-9]{1,10})$/);
+    if (!extensionMatch) return "";
+    return `.${extensionMatch[1].toLowerCase()}`;
+  } catch {
+    const fallbackMatch = src.match(/\.([a-zA-Z0-9]{1,10})(?:$|[?#])/);
+    return fallbackMatch ? `.${fallbackMatch[1].toLowerCase()}` : "";
+  }
+}
+
+function getImageViewerDownloadName() {
+  const title = imageViewerTitleEl?.textContent || imageViewerImageEl?.alt || "Image";
+  const baseName = sanitizeDownloadBaseName(title);
+  const src = imageViewerImageEl?.currentSrc || imageViewerImageEl?.src || "";
+  const extension = detectImageExtensionFromSrc(src) || ".jpg";
+  return `${baseName}${extension}`;
+}
+
+function downloadImageFromViewer() {
+  if (!imageViewerImageEl) return;
+  const src = imageViewerImageEl.currentSrc || imageViewerImageEl.src;
+  if (!src) {
+    showNotice("No image to download.", "error");
+    return;
+  }
+
+  const anchor = document.createElement("a");
+  anchor.href = src;
+  anchor.download = getImageViewerDownloadName();
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function makeThumbnailOpenable(imageEl, src, title) {
@@ -4045,6 +4104,7 @@ imageViewerCloseButtonEl?.addEventListener("click", () => closeModal(imageViewer
 imageViewerFitButtonEl?.addEventListener("click", fitImageViewerToStage);
 imageViewerZoomInButtonEl?.addEventListener("click", () => zoomImageViewerBy(1.2));
 imageViewerZoomOutButtonEl?.addEventListener("click", () => zoomImageViewerBy(1 / 1.2));
+imageViewerDownloadButtonEl?.addEventListener("click", downloadImageFromViewer);
 
 imageViewerStageEl?.addEventListener("wheel", (event) => {
   event.preventDefault();
