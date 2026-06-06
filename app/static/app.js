@@ -4100,7 +4100,6 @@ for (const [id, modal] of [["items-modal-close", itemsModalEl], ["portals-modal-
   document.getElementById(id)?.addEventListener("click", () => closeModal(modal));
 }
 
-imageViewerCloseButtonEl?.addEventListener("click", () => closeModal(imageViewerModalEl));
 imageViewerFitButtonEl?.addEventListener("click", fitImageViewerToStage);
 imageViewerZoomInButtonEl?.addEventListener("click", () => zoomImageViewerBy(1.2));
 imageViewerZoomOutButtonEl?.addEventListener("click", () => zoomImageViewerBy(1 / 1.2));
