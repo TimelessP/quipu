@@ -56,7 +56,6 @@
   --link-hover: #003b88;
   --link-visited: #5d2ea8;
 }
-
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #020202;
@@ -68,7 +67,6 @@
   --border: rgba(39, 244, 255, 0.88);
   --overlay-shadow: 0 0 0 1px rgba(39, 244, 255, 0.3), 0 0 24px rgba(39, 244, 255, 0.18), 0 0 54px rgba(255, 67, 208, 0.12);
   --scroll-track: rgba(255, 255, 255, 0.06);
-  --scroll-thumb: rgba(39, 244, 255, 0.75);
   --chip-bg: rgba(0, 0, 0, 0.92);
   --chip-ink: #d6f8ff;
   --chip-active-bg: linear-gradient(135deg, rgba(39, 244, 255, 0.16), rgba(255, 67, 208, 0.18));
@@ -283,7 +281,8 @@ h2 {
 .app-shell {
   position: relative;
   width: 100vw;
-  height: 100dvh;
+  /* Use a CSS variable set from JS to avoid mobile PWA 100vh issues. */
+  height: calc(var(--vh, 1vh) * 100);
 }
 
 .menu-scrim {
@@ -527,7 +526,7 @@ h2 {
   transform: translate(-50%, -50%) scale(0.98);
   z-index: 1140;
   width: min(860px, calc(100% - 1.5rem));
-  max-height: calc(100dvh - 2rem);
+  max-height: calc(var(--vh, 1vh) * 100 - 2rem);
   overflow: auto;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -545,7 +544,7 @@ h2 {
 #image-viewer-modal {
   z-index: 1170;
   width: min(980px, calc(100% - 1rem));
-  max-height: calc(100dvh - 1rem);
+  max-height: calc(var(--vh, 1vh) * 100 - 1rem);
   padding-bottom: 0.65rem;
 }
 
@@ -901,6 +900,8 @@ h2 {
   line-height: 1.25;
   color: var(--ink);
   display: -webkit-box;
+  /* Standard property for line clamping where supported */
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -1003,7 +1004,7 @@ h2 {
   top: calc(max(0.75rem, env(safe-area-inset-top)) + 3.55rem);
   right: max(0.75rem, env(safe-area-inset-right));
   width: min(420px, calc(100% - 1.5rem));
-  max-height: calc(100dvh - max(12.8rem, env(safe-area-inset-top) + 11.75rem));
+  max-height: calc(var(--vh, 1vh) * 100 - max(12.8rem, env(safe-area-inset-top) + 11.75rem));
   overflow-y: auto;
   z-index: 1050;
   display: grid;
@@ -1392,7 +1393,7 @@ button:focus-visible {
     right: max(0.75rem, env(safe-area-inset-right));
     width: auto;
     top: calc(max(0.75rem, env(safe-area-inset-top)) + 3.55rem);
-    max-height: calc(100dvh - 14.5rem);
+    max-height: calc(var(--vh, 1vh) * 100 - 14.5rem);
   }
 
   .status-panel {

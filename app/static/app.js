@@ -143,6 +143,37 @@ const portalContentImagePreviewEl = document.getElementById("portal-content-imag
 const portalNearbyListEl = document.getElementById("portal-nearby-list");
 const gpsAccuracyOverrideInputEl = document.getElementById("gps-accuracy-override");
 
+// Workaround for mobile PWA viewport height issues:
+// Set a CSS variable `--vh` representing 1% of the viewport height in pixels.
+// Use this in CSS as `height: calc(var(--vh) * 100)` to avoid 100vh/100dvh initial-measure bugs.
+function updateVhCssVar() {
+  try {
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty("--vh", `${vh}px`);
+  } catch (e) {
+    // ignore in environments where access might be restricted
+  }
+}
+
+function applyInitialVhFix() {
+  updateVhCssVar();
+  // some browsers need a delayed second measurement (PWA standalone / iOS quirks)
+  setTimeout(updateVhCssVar, 250);
+  // also re-run on next animation frame to catch layout changes
+  requestAnimationFrame(() => setTimeout(updateVhCssVar, 50));
+}
+
+// Run early and on relevant events
+if (document.readyState === "complete" || document.readyState === "interactive") {
+  applyInitialVhFix();
+} else {
+  window.addEventListener("DOMContentLoaded", applyInitialVhFix, { once: true });
+}
+
+window.addEventListener("resize", updateVhCssVar, { passive: true });
+window.addEventListener("orientationchange", () => setTimeout(updateVhCssVar, 150), { passive: true });
+window.addEventListener("pageshow", (ev) => { if (ev && ev.persisted) setTimeout(updateVhCssVar, 50); }, { passive: true });
+
 let prefersDarkMediaQuery = null;
 let noticeTimerId = null;
 let itemAddTarget = "location";
