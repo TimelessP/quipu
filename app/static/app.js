@@ -1039,7 +1039,18 @@ function loadPortalFavorites() {
 }
 
 function savePortalFavorites(favorites) {
-  localStorage.setItem(portalFavoritesKey, JSON.stringify(favorites.map((favorite) => normalizePortalFavorite(favorite))));
+  const normalized = favorites.map((favorite) => normalizePortalFavorite(favorite));
+  try {
+    localStorage.setItem(portalFavoritesKey, JSON.stringify(normalized));
+  } catch (error) {
+    const isQuota = error instanceof DOMException && error.name === "QuotaExceededError";
+    if (!isQuota) throw error;
+
+    // Keep favourite metadata and upload paths, but drop large inline data URLs.
+    const compacted = normalized.map((favorite) => ({ ...favorite, content_data_url: null }));
+    localStorage.setItem(portalFavoritesKey, JSON.stringify(compacted));
+    notify("Stored favourites without embedded image blobs to avoid browser storage limit.", "info", 3000);
+  }
 }
 
 function normalizeOptionalText(value) {
@@ -4650,19 +4661,6 @@ function saveInventory() {
   localStorage.setItem(inventoryKey, JSON.stringify(state.inventory.map((item) => normalizeInventoryItem(item))));
 }
 
-async function resolveItemImageDataUrl(item) {
-  if (item?.content_data_url) return item.content_data_url;
-  if (!item?.content_upload_path) return null;
-  try {
-    const response = await fetch(item.content_upload_path);
-    if (!response.ok) throw new Error("download failed");
-    const blob = await response.blob();
-    return await fileToDataUrl(blob);
-  } catch {
-    return null;
-  }
-}
-
 async function deleteLocationItem(item) {
   try {
     const response = await fetch(
@@ -4773,7 +4771,8 @@ async function pickUpItem(item) {
       content_name: item.content_name ?? null,
       content_text: item.content_text ?? null,
       content_url: item.content_url ?? null,
-      content_data_url: await resolveItemImageDataUrl(item),
+      content_upload_path: item.content_upload_path ?? null,
+      content_data_url: item.content_data_url ?? null,
     });
     savePortalFavorites(favorites);
     renderPortalModal();
