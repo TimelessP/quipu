@@ -1307,7 +1307,19 @@ const ITEM_CARD_RENDERERS = {
   },
   favorite_portal_item: {
     title: (item) => item.content_name || item.favorite_portal_name || "Favourite Portal",
-    locationBodyHtml: () => "",
+    locationBodyHtml: (item) => {
+      const parts = [];
+      if (item.content_text) parts.push(`<div class="item-content-text">${escapeHtml(item.content_text)}</div>`);
+      const safeContentUrl = sanitizeExternalHttpUrl(item.content_url);
+      if (safeContentUrl) {
+        parts.push(`<div class="item-content-url"><a href="${escapeHtml(safeContentUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(safeContentUrl)}</a></div>`);
+      }
+      const imageSrc = item.content_upload_path || item.content_data_url;
+      if (imageSrc) {
+        parts.push(`<img class="item-photo" src="${escapeHtml(imageSrc)}" alt="media" />`);
+      }
+      return parts.join("");
+    },
     inventoryDetailHtml: (item) => `<small>Local favourite • ${escapeHtml((item.portalId || "unknown").slice(0, 8))}...</small>`,
   },
   portal_marker: {
@@ -1475,6 +1487,7 @@ const ITEM_FLOW_BEHAVIORS = {
         content_name: finalName || null,
         content_text: finalText,
         content_url: finalUrl,
+        content_upload_path: hasImage ? item.content_upload_path : null,
         favorite_portal_id: item.favorite_portal_id,
         favorite_portal_latitude: item.favorite_portal_latitude,
         favorite_portal_longitude: item.favorite_portal_longitude,
