@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Quipu MVP</title>
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="/static/appicon.png?v=__ASSET_VERSION__" />
     <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v=__ASSET_VERSION__" />
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
   </head>
@@ -104,11 +104,19 @@
           <h2>Portals</h2>
           <button id="portals-modal-close" class="modal-close" type="button">Close</button>
         </div>
+        <div class="portal-workflow-actions">
+          <button id="portal-create-open" type="button">+ New Portal Here</button>
+          <button id="portal-edit-nearby" type="button">✎ Edit Nearby Portal</button>
+          <button id="portal-add-favorite" type="button">+ Add Nearby To Favourites</button>
+          <button id="portal-clear-link" type="button">Clear Link</button>
+          <button id="portal-remove-nearby" type="button">Remove Nearby Portal</button>
+        </div>
         <div class="portal-name-panel">
           <div class="portal-editor-header">
             <strong id="portal-editor-target">Target: no nearby portal selected</strong>
             <button id="portal-load-nearest" type="button">Load Nearest</button>
           </div>
+          <p id="portal-editor-mode" class="portal-name-hint">Editor closed.</p>
           <label for="portal-name-input">Portal Name</label>
           <input id="portal-name-input" type="text" maxlength="80" placeholder="Name a portal near you" />
           <label for="portal-content-text">Portal Content Text</label>
@@ -120,15 +128,13 @@
           <input id="portal-content-image" type="file" accept="image/*" />
           <button id="portal-content-image-remove" type="button">Remove Current Image</button>
           <img id="portal-content-image-preview" class="portal-editor-image" alt="Portal image preview" hidden />
-          <p class="portal-name-hint">Updates only work when you are physically near the portal.</p>
+          <div class="portal-editor-actions">
+            <button id="portal-editor-save" type="button">Save</button>
+            <button id="portal-editor-cancel" type="button">Cancel</button>
+          </div>
+          <p class="portal-name-hint">Editing applies immediately when you press Save.</p>
         </div>
         <div id="portal-link-summary" class="portal-link-summary">No linked portal.</div>
-        <div class="portal-modal-actions">
-          <button id="portal-add-here" type="button">Add Portal Here</button>
-          <button id="portal-add-favorite" type="button">Add Nearby Portal To Favourites</button>
-          <button id="portal-clear-link" type="button">Clear Link</button>
-          <button id="portal-remove-nearby" type="button">Remove Nearby Portal</button>
-        </div>
         <h3>Nearby Portals</h3>
         <ul id="portal-nearby-list" class="modal-list"></ul>
         <h3>Favourites</h3>
@@ -192,7 +198,7 @@
 
       <section id="item-add-modal" class="app-modal nested-modal" aria-label="Add item" aria-hidden="true">
         <div class="app-modal-header">
-          <h2>Add Item</h2>
+          <h2 id="item-add-title">Add Item</h2>
           <button id="item-add-close" class="modal-close" type="button">Close</button>
         </div>
         <form id="item-add-form" class="item-add-form">

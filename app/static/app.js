@@ -58,7 +58,6 @@ if (_savedInventory) {
 localStorage.setItem("quipuOwnerId", state.ownerId);
 
 const cacheKey = "quipuNearbyCacheV1";
-const queueKey = "quipuWriteQueueV1";
 const customLocCKey = "quipuGpsLocC";
 const themeChoiceKey = "quipuThemeChoiceV1";
 const portalFavoritesKey = "quipuPortalFavoritesV1";
@@ -105,12 +104,14 @@ const locationItemsListEl = document.getElementById("location-items-list");
 const inventoryItemsListEl = document.getElementById("inventory-items");
 const portalFavoritesListEl = document.getElementById("portal-favorites-list");
 const itemAddFormEl = document.getElementById("item-add-form");
+const itemAddTitleEl = document.getElementById("item-add-title");
 const itemAddTypeEl = document.getElementById("item-add-type");
 const itemAddMediaFieldsEl = document.getElementById("item-add-media-fields");
 const itemAddNameEl = document.getElementById("item-add-name");
 const itemAddTextEl = document.getElementById("item-add-text");
 const itemAddUrlEl = document.getElementById("item-add-url");
 const itemAddPhotoEl = document.getElementById("item-add-photo");
+const itemAddSubmitButtonEl = document.getElementById("item-add-submit");
 const settingsModalEl = document.getElementById("settings-modal");
 const aboutModalEl = document.getElementById("about-modal");
 const imageViewerModalEl = document.getElementById("image-viewer-modal");
@@ -130,7 +131,13 @@ const portalContentUrlEl = document.getElementById("portal-content-url");
 const portalContentImageEl = document.getElementById("portal-content-image");
 const portalContentImageRemoveButtonEl = document.getElementById("portal-content-image-remove");
 const portalEditorTargetEl = document.getElementById("portal-editor-target");
+const portalEditorModeEl = document.getElementById("portal-editor-mode");
 const portalLoadNearestButtonEl = document.getElementById("portal-load-nearest");
+const portalCreateOpenButtonEl = document.getElementById("portal-create-open");
+const portalEditNearbyButtonEl = document.getElementById("portal-edit-nearby");
+const portalEditorSaveButtonEl = document.getElementById("portal-editor-save");
+const portalEditorCancelButtonEl = document.getElementById("portal-editor-cancel");
+const portalNamePanelEl = document.querySelector("#portals-modal .portal-name-panel");
 const portalContentUrlPreviewEl = document.getElementById("portal-content-url-preview");
 const portalContentImagePreviewEl = document.getElementById("portal-content-image-preview");
 const portalNearbyListEl = document.getElementById("portal-nearby-list");
@@ -139,11 +146,17 @@ const gpsAccuracyOverrideInputEl = document.getElementById("gps-accuracy-overrid
 let prefersDarkMediaQuery = null;
 let noticeTimerId = null;
 let itemAddTarget = "location";
+let itemFormMode = "add";
+let itemEditEntryId = null;
+let itemEditSource = "inventory";
 let persistClientStateTimerId = null;
 let followRestoreFrameId = null;
 let portalEditorTargetId = null;
 let portalEditorBaseline = null;
 let portalEditorImageClearRequested = false;
+let portalEditorHasPendingChanges = false;
+let portalEditorOpen = false;
+let portalEditorMode = "closed";
 let menuShareQrCode = null;
 let imageViewerScale = 1;
 let imageViewerTx = 0;
@@ -865,12 +878,22 @@ function openModal(modalEl) {
 
 function closeModal(modalEl) {
   if (!modalEl) return;
-  if (modalEl === itemsModalEl) closeUiLayer("items");
-  else if (modalEl === portalsModalEl) closeUiLayer("portals");
+  if (modalEl === itemsModalEl) {
+    cancelInventoryItemEdit();
+    closeUiLayer("items");
+  }
+  else if (modalEl === portalsModalEl) {
+    closePortalEditor();
+    closeUiLayer("portals");
+  }
   else if (modalEl === debugModalEl) closeUiLayer("debug");
   else if (modalEl === settingsModalEl) closeUiLayer("settings");
   else if (modalEl === aboutModalEl) closeUiLayer("about");
-  else if (modalEl === itemAddModalEl) closeUiLayer("item-add");
+  else if (modalEl === itemAddModalEl) {
+    cancelInventoryItemEdit();
+    resetItemAddForm();
+    closeUiLayer("item-add");
+  }
   else if (modalEl === imageViewerModalEl) closeUiLayer("image-viewer");
 }
 
@@ -1138,6 +1161,85 @@ function getInventoryEntries() {
   }));
 
   return [...favoriteEntries, ...inventoryEntries];
+}
+
+function cancelInventoryItemEdit() {
+  itemFormMode = "add";
+  itemEditEntryId = null;
+  itemEditSource = "inventory";
+}
+
+function resetItemAddForm({ keepType = false } = {}) {
+  if (!keepType && itemAddTypeEl) itemAddTypeEl.value = "media";
+  if (itemAddNameEl) itemAddNameEl.value = "";
+  if (itemAddTextEl) itemAddTextEl.value = "";
+  if (itemAddUrlEl) itemAddUrlEl.value = "";
+  if (itemAddPhotoEl) itemAddPhotoEl.value = "";
+  syncItemAddFieldsForType();
+}
+
+function setItemFormMode(mode, entry = null, source = "inventory") {
+  itemFormMode = mode === "edit" ? "edit" : "add";
+  itemEditEntryId = itemFormMode === "edit" && entry?.id ? entry.id : null;
+  itemEditSource = itemFormMode === "edit" && source === "location" ? "location" : "inventory";
+
+  if (itemFormMode === "edit") {
+    if (itemAddTitleEl) itemAddTitleEl.textContent = "Edit Item";
+    if (itemAddSubmitButtonEl) itemAddSubmitButtonEl.textContent = "Save";
+    if (itemAddTypeEl) itemAddTypeEl.disabled = true;
+  } else {
+    if (itemAddTitleEl) itemAddTitleEl.textContent = "Add Item";
+    if (itemAddSubmitButtonEl) itemAddSubmitButtonEl.textContent = "Submit";
+    if (itemAddTypeEl) itemAddTypeEl.disabled = false;
+  }
+}
+
+function openItemAddModal(target = "location") {
+  itemAddTarget = target === "inventory" ? "inventory" : "location";
+  setItemFormMode("add");
+  resetItemAddForm();
+  openModal(itemAddModalEl);
+  itemAddTextEl?.focus();
+}
+
+function openItemEditModal(entry, source = "inventory") {
+  if (!entry || entry.type === "visit_counter") {
+    notify("This item type is not editable.", "error", 2200);
+    return;
+  }
+
+  if (itemAddTypeEl) {
+    itemAddTypeEl.value = "media";
+  }
+  resetItemAddForm({ keepType: true });
+
+  if (itemAddNameEl) itemAddNameEl.value = entry.content_name || "";
+  if (itemAddTextEl) itemAddTextEl.value = entry.content_text || "";
+  if (itemAddUrlEl) itemAddUrlEl.value = entry.content_url || "";
+  if (itemAddPhotoEl) itemAddPhotoEl.value = "";
+
+  setItemFormMode("edit", entry, source);
+  openModal(itemAddModalEl);
+  itemAddTextEl?.focus();
+}
+
+function openInventoryEditorForEntry(entryId) {
+  if (!entryId) return;
+  const target = getInventoryEntries().find((entry) => entry.id === entryId);
+  if (!target) {
+    notify("Item not available for editing.", "error", 2200);
+    return;
+  }
+  openItemEditModal(target, "inventory");
+}
+
+function openLocationEditorForItem(item) {
+  if (!item || !item.id) return;
+  if (item.type !== "media" && item.type !== "favorite_portal_item") {
+    notify("Only media/favourite items can be edited in place.", "error", 2400);
+    return;
+  }
+  openItemEditModal(item, "location");
 }
 
 function getDisplayItemTypeLabel(item) {
@@ -2172,85 +2274,6 @@ function getDistanceAwareCellCacheTtlMs(cellId, originLat, originLng, h3Api) {
   }
 }
 
-function queueWrite(payload) {
-  const raw = localStorage.getItem(queueKey);
-  const q = raw ? JSON.parse(raw) : [];
-  q.push(payload);
-  localStorage.setItem(queueKey, JSON.stringify(q));
-}
-
-async function replayQueue() {
-  const raw = localStorage.getItem(queueKey);
-  const q = raw ? JSON.parse(raw) : [];
-  if (!q.length || !navigator.onLine) return;
-
-  const remaining = [];
-  for (const payload of q) {
-    try {
-      if (!payload.kind || payload.kind === "json") {
-        await sendJson(payload.url, payload.body);
-      } else if (payload.kind === "photo") {
-        await sendQueuedPhoto(payload);
-      } else if (payload.kind === "portal") {
-        await sendQueuedPortal(payload);
-      } else {
-        throw new Error("Unknown queue payload kind");
-      }
-    } catch {
-      remaining.push(payload);
-    }
-  }
-  localStorage.setItem(queueKey, JSON.stringify(remaining));
-}
-
-async function sendQueuedPhoto(payload) {
-  const form = new FormData();
-  form.append("owner", payload.owner);
-  form.append("latitude", String(payload.latitude));
-  form.append("longitude", String(payload.longitude));
-  form.append("accuracy_meters", String(payload.accuracy_meters));
-  form.append("file", dataUrlToFile(payload.fileDataUrl, payload.fileName, payload.fileType));
-
-  const response = await fetch(payload.url, {
-    method: "POST",
-    body: form,
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-}
-
-async function sendQueuedPortal(payload) {
-  const form = new FormData();
-  form.append("owner", payload.owner);
-  form.append("latitude", String(payload.latitude));
-  form.append("longitude", String(payload.longitude));
-  form.append("accuracy_meters", String(payload.accuracy_meters));
-  if (payload.portal_name) form.append("portal_name", payload.portal_name);
-  if (payload.content_text) form.append("content_text", payload.content_text);
-  if (payload.content_url) form.append("content_url", payload.content_url);
-  if (payload.fileDataUrl) {
-    form.append(
-      "file",
-      dataUrlToFile(
-        payload.fileDataUrl,
-        payload.fileName || `portal-${Date.now()}.bin`,
-        payload.fileType || "application/octet-stream"
-      )
-    );
-  }
-
-  const response = await fetch(payload.url, {
-    method: "POST",
-    body: form,
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-}
-
 function dataUrlToFile(dataUrl, filename, contentType) {
   const base64 = dataUrl.split(",")[1];
   const bytes = atob(base64);
@@ -2918,32 +2941,111 @@ function createPortalListSummary({
   return summary;
 }
 
+function clearPortalEditorForm() {
+  if (portalNameInputEl) portalNameInputEl.value = "";
+  if (portalContentTextEl) portalContentTextEl.value = "";
+  if (portalContentUrlEl) portalContentUrlEl.value = "";
+  if (portalContentImageEl) portalContentImageEl.value = "";
+  portalEditorTargetId = null;
+  portalEditorBaseline = null;
+  portalEditorImageClearRequested = false;
+  portalEditorHasPendingChanges = false;
+  renderPortalEditorPreview(null);
+}
+
+function openPortalEditorForCreate() {
+  portalEditorOpen = true;
+  portalEditorMode = "create";
+  clearPortalEditorForm();
+  if (portalEditorTargetEl) {
+    portalEditorTargetEl.textContent = "Target: creating a new portal at your current location";
+  }
+}
+
+function openPortalEditorForUpdate(portal) {
+  if (!portal || portal.type !== "portal_marker") return;
+  if (isPortalEditorDirty() && portalEditorTargetId && portalEditorTargetId !== portal.id) {
+    notify("Save or cancel current edits before switching portal.", "error", 2600);
+    return;
+  }
+  portalEditorOpen = true;
+  portalEditorMode = "update";
+  setPortalEditorTarget(portal, { prefill: true });
+}
+
+function closePortalEditor() {
+  portalEditorOpen = false;
+  portalEditorMode = "closed";
+  portalEditorHasPendingChanges = false;
+  if (portalContentImageEl) portalContentImageEl.value = "";
+}
+
 function renderPortalModal() {
   renderNearbyPortalList();
 
-  const addHereButton = document.getElementById("portal-add-here");
   const addFavoriteButton = document.getElementById("portal-add-favorite");
+  const editNearbyButton = document.getElementById("portal-edit-nearby");
+  const createButton = document.getElementById("portal-create-open");
   const clearButton = document.getElementById("portal-clear-link");
   const removeNearbyButton = document.getElementById("portal-remove-nearby");
+  const saveButton = document.getElementById("portal-editor-save");
 
   const shifted = isVirtualShiftActive();
-  if (addHereButton) addHereButton.disabled = shifted;
+  if (createButton) createButton.disabled = shifted;
+  if (editNearbyButton) editNearbyButton.disabled = !getNearestPhysicalPortal();
   if (addFavoriteButton) addFavoriteButton.disabled = !getNearestPortalAtVirtualPosition(PICKUP_RANGE_METERS);
   if (clearButton) clearButton.disabled = !canClearCurrentPortalLink();
   if (removeNearbyButton) removeNearbyButton.disabled = !getPortalRemovalTarget();
+  if (portalNamePanelEl) portalNamePanelEl.classList.toggle("is-collapsed", !portalEditorOpen);
+
+  if (portalEditorModeEl) {
+    if (portalEditorMode === "create") {
+      portalEditorModeEl.textContent = "Create mode: enter details and press Save.";
+    } else if (portalEditorMode === "update") {
+      portalEditorModeEl.textContent = "Edit mode: modify portal details and press Save.";
+    } else {
+      portalEditorModeEl.textContent = "Editor closed.";
+    }
+  }
+
+  if (saveButton) {
+    if (portalEditorMode === "create") {
+      saveButton.textContent = "Create Portal";
+      saveButton.disabled = false;
+    } else if (portalEditorMode === "update") {
+      saveButton.textContent = "Save Changes";
+      saveButton.disabled = !getPortalEditorTargetPortal();
+    } else {
+      saveButton.textContent = "Save";
+      saveButton.disabled = true;
+    }
+  }
 
   const hasSelectedReplacementImage = Boolean(portalContentImageEl?.files?.length);
   const hasCurrentPortalImage = Boolean(getPortalEditorTargetPortal()?.content_upload_path);
+  if (portalLoadNearestButtonEl) {
+    portalLoadNearestButtonEl.disabled = !(portalEditorOpen && portalEditorMode === "update");
+  }
   if (portalContentImageRemoveButtonEl) {
-    portalContentImageRemoveButtonEl.disabled = !hasSelectedReplacementImage && !hasCurrentPortalImage && !portalEditorImageClearRequested;
+    portalContentImageRemoveButtonEl.disabled = !portalEditorOpen || (!hasSelectedReplacementImage && !hasCurrentPortalImage && !portalEditorImageClearRequested);
   }
 
   const targetPortal = getPortalEditorTargetPortal();
-  if (!targetPortal) {
-    setPortalEditorTarget(null);
-  } else if (!portalEditorBaseline || portalEditorBaseline.id !== targetPortal.id) {
-    setPortalEditorTarget(targetPortal, { prefill: true });
-  } else {
+  if (portalEditorOpen && portalEditorMode === "create") {
+    if (portalEditorTargetEl) {
+      portalEditorTargetEl.textContent = "Target: creating a new portal at your current location";
+    }
+    renderPortalEditorPreview(null);
+  } else if (portalEditorOpen && portalEditorMode === "update" && !targetPortal) {
+    if (!isPortalEditorDirty()) {
+      setPortalEditorTarget(null);
+      closePortalEditor();
+    }
+  } else if (portalEditorOpen && portalEditorMode === "update" && targetPortal && (!portalEditorBaseline || portalEditorBaseline.id !== targetPortal.id)) {
+    if (!isPortalEditorDirty()) {
+      setPortalEditorTarget(targetPortal, { prefill: true });
+    }
+  } else if (portalEditorOpen) {
     renderPortalEditorPreview(targetPortal);
   }
 
@@ -3006,11 +3108,18 @@ function renderPortalModal() {
       longitude: Number(favorite.longitude),
       contentText: favorite.content_text ?? null,
       contentUrl: favorite.content_url ?? null,
-      imageUrl: favorite.content_upload_path ?? null,
+      imageUrl: favorite.content_upload_path || favorite.content_data_url || null,
     }));
 
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
+
+    const editButton = document.createElement("button");
+    editButton.textContent = "✎ Edit";
+    editButton.addEventListener("click", () => {
+      openInventoryEditorForEntry(`favorite:${favorite.id}`);
+    });
+    actions.appendChild(editButton);
 
     const removeButton = document.createElement("button");
     removeButton.textContent = "Remove Favourite";
@@ -3072,22 +3181,12 @@ function renderNearbyPortalList() {
     actions.className = "portal-nearby-actions";
 
     const loadButton = document.createElement("button");
-    loadButton.textContent = "Load";
+    loadButton.textContent = "✎ Edit";
     loadButton.addEventListener("click", () => {
-      setPortalEditorTarget(portal, { prefill: true });
-      notify("Loaded portal details into editor.", "info", 1800);
+      openPortalEditorForUpdate(portal);
+      renderPortalModal();
     });
     actions.appendChild(loadButton);
-
-    const updateButton = document.createElement("button");
-    updateButton.textContent = "Update";
-    updateButton.addEventListener("click", () => {
-      if (portalEditorTargetId !== portal.id || !portalEditorBaseline) {
-        setPortalEditorTarget(portal, { prefill: false });
-      }
-      updatePortalDetails(portal);
-    });
-    actions.appendChild(updateButton);
 
     actions.appendChild(createPortalShareButton(portal));
 
@@ -3100,11 +3199,11 @@ async function updatePortalDetails(portal) {
   const targetPortal = portal && portal.type === "portal_marker" ? portal : getPortalEditorTargetPortal();
   if (!targetPortal || targetPortal.type !== "portal_marker") {
     notify("No nearby portal selected for update.", "error");
-    return;
+    return false;
   }
 
   const actor = getEffectiveActorPosition();
-  if (!actor) return;
+  if (!actor) return false;
 
   const portalNameRaw = portalNameInputEl?.value?.trim?.() ?? "";
   const portalTextRaw = portalContentTextEl?.value ?? "";
@@ -3128,12 +3227,12 @@ async function updatePortalDetails(portal) {
 
   if (!changedName && !changedText && !changedUrl && !changedImage) {
     notify("No portal changes to apply.", "info", 2200);
-    return;
+    return false;
   }
 
   if (changedName && !portalNameRaw) {
     notify("Portal name cannot be blank.", "error");
-    return;
+    return false;
   }
 
   if (portalUrlRaw) {
@@ -3143,7 +3242,7 @@ async function updatePortalDetails(portal) {
       new URL(portalUrlRaw);
     } catch {
       notify("Portal URL must be a valid absolute URL.", "error");
-      return;
+      return false;
     }
   }
 
@@ -3171,13 +3270,14 @@ async function updatePortalDetails(portal) {
       if (response.status === 404) {
         reconcileMissingItem(targetPortal.id);
         notify("Portal no longer exists. Removed stale portal from your view.", "info", 2800);
-        return;
+        return false;
       }
       throw new Error(await response.text());
     }
     const updated = await response.json();
     if (portalContentImageEl) portalContentImageEl.value = "";
     portalEditorImageClearRequested = false;
+    portalEditorHasPendingChanges = false;
     invalidatePortalCache(updated.id || targetPortal.id);
     updatePortalItemsInState(updated);
     setPortalEditorTarget(updated, { prefill: true });
@@ -3185,9 +3285,11 @@ async function updatePortalDetails(portal) {
     drawPortalLink();
     renderPortalModal();
     notify("Portal updated.", "success", 2200);
+    return true;
   } catch (err) {
     console.error(err);
     notify(parseErrorMessage(err) || "Failed to update portal.", "error");
+    return false;
   }
 }
 
@@ -3333,6 +3435,19 @@ function renderItemList(items) {
           : "Move Closer To Pick Up",
       () => pickUpItem(item),
       !canPickUp
+    );
+
+    appendItemActionButton(
+      actions,
+      "✎ Edit",
+      () => {
+        if (dist === null || dist > PICKUP_RANGE_METERS) {
+          notify(`Move within ${PICKUP_RANGE_METERS}m to edit this item.`, "error", 2600);
+          return;
+        }
+        openLocationEditorForItem(item);
+      },
+      dist === null || dist > PICKUP_RANGE_METERS
     );
 
     appendDownloadItemAction(actions, item, "location");
@@ -3674,7 +3789,7 @@ function beginGeolocation() {
 }
 
 async function placePortal() {
-  if (!state.physicalPosition) return;
+  if (!state.physicalPosition) return false;
   const portalName = getPortalNameInputValue();
   const portalTextRaw = portalContentTextEl?.value ?? "";
   const portalUrlRaw = portalContentUrlEl?.value?.trim?.() ?? "";
@@ -3684,7 +3799,7 @@ async function placePortal() {
 
   if (tooClose) {
     notify(`Portal too close to an existing portal. Keep at least ${MIN_PORTAL_SPACING_METERS}m spacing.`, "error");
-    return;
+    return false;
   }
 
   if (portalUrlRaw) {
@@ -3694,7 +3809,7 @@ async function placePortal() {
       new URL(portalUrlRaw);
     } catch {
       notify("Portal URL must be a valid absolute URL.", "error");
-      return;
+      return false;
     }
   }
 
@@ -3703,7 +3818,10 @@ async function placePortal() {
   let created = null;
 
   try {
-    if (!navigator.onLine) throw new Error("offline");
+    if (!navigator.onLine) {
+      notify("You are offline. Portal add requires an active connection.", "error", 3200);
+      return false;
+    }
     const form = new FormData();
     form.append("owner", state.ownerId);
     form.append("latitude", String(state.physicalPosition.lat));
@@ -3727,44 +3845,23 @@ async function placePortal() {
     const message = parseErrorMessage(err);
     const isOfflineLike = /^offline$/i.test(message) || /fetch/i.test(message);
     if (isOfflineLike) {
-      const queuedPayload = {
-        kind: "portal",
-        url,
-        owner: state.ownerId,
-        latitude: state.physicalPosition.lat,
-        longitude: state.physicalPosition.lng,
-        accuracy_meters: getPlacementAccuracyMeters(),
-        portal_name: portalName || null,
-        content_text: portalText || null,
-        content_url: portalUrlRaw || null,
-      };
-
-      if (portalImageFile) {
-        queuedPayload.fileDataUrl = await fileToDataUrl(portalImageFile);
-        queuedPayload.fileName = portalImageFile.name || `portal-${Date.now()}.bin`;
-        queuedPayload.fileType = portalImageFile.type || "application/octet-stream";
-      }
-
-      queueWrite(queuedPayload);
-      portalEditorImageClearRequested = false;
-      if (portalContentImageEl) portalContentImageEl.value = "";
-      notify("Portal add queued and will sync when back online.", "info", 3200);
-      return;
+      notify("Network unavailable. Portal add requires an active connection.", "error", 3200);
+      return false;
     }
 
     if (message) {
       const timeoutMs = /accuracy/i.test(message) ? 5000 : 2600;
       notify(message, "error", timeoutMs);
     }
-    return;
+    return false;
   }
 
-  await replayQueue();
   const virtual = getVirtualPosition();
   if (virtual) {
     await loadNearby(virtual.lat, virtual.lng, false);
   }
   renderPortalModal();
+  return true;
 }
 
 function getPortalNameInputValue() {
@@ -3787,7 +3884,11 @@ function renderPortalEditorPreview(portal) {
   if (!portalEditorTargetEl) return;
 
   if (!portal) {
-    portalEditorTargetEl.textContent = "Target: no nearby portal selected";
+    if (portalEditorMode === "create") {
+      portalEditorTargetEl.textContent = "Target: creating a new portal at your current location";
+    } else {
+      portalEditorTargetEl.textContent = "Target: no nearby portal selected";
+    }
     if (portalContentUrlPreviewEl) {
       portalContentUrlPreviewEl.hidden = true;
       portalContentUrlPreviewEl.href = "#";
@@ -3835,11 +3936,28 @@ function renderPortalEditorPreview(portal) {
   }
 }
 
+function isPortalEditorDirty() {
+  if (!portalEditorBaseline) return false;
+
+  const portalNameRaw = portalNameInputEl?.value?.trim?.() ?? "";
+  const portalTextRaw = portalContentTextEl?.value ?? "";
+  const portalUrlRaw = portalContentUrlEl?.value?.trim?.() ?? "";
+  const portalImageFile = portalContentImageEl?.files?.[0] || null;
+
+  const changedName = portalNameRaw !== portalEditorBaseline.portal_name;
+  const changedText = portalTextRaw !== portalEditorBaseline.content_text;
+  const changedUrl = portalUrlRaw !== portalEditorBaseline.content_url;
+  const changedImage = Boolean(portalImageFile) || (portalEditorImageClearRequested && Boolean(portalEditorBaseline.content_upload_path));
+
+  return changedName || changedText || changedUrl || changedImage || portalEditorHasPendingChanges;
+}
+
 function setPortalEditorTarget(portal, { prefill = true } = {}) {
   if (!portal || portal.type !== "portal_marker") {
     portalEditorTargetId = null;
     portalEditorBaseline = null;
     portalEditorImageClearRequested = false;
+    portalEditorHasPendingChanges = false;
     renderPortalEditorPreview(null);
     return;
   }
@@ -3866,6 +3984,7 @@ function setPortalEditorTarget(portal, { prefill = true } = {}) {
 
   if (prefill) {
     portalEditorImageClearRequested = false;
+    portalEditorHasPendingChanges = false;
     if (portalNameInputEl) portalNameInputEl.value = portalEditorBaseline.portal_name;
     if (portalContentTextEl) portalContentTextEl.value = portalEditorBaseline.content_text;
     if (portalContentUrlEl) portalContentUrlEl.value = portalEditorBaseline.content_url;
@@ -4023,7 +4142,6 @@ async function applySharedPortalLocationFromUrl() {
 
 window.addEventListener("online", async () => {
   setNetworkStatus();
-  await replayQueue();
   const virtual = getVirtualPosition();
   if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
 });
@@ -4213,24 +4331,40 @@ imageViewerStageEl?.addEventListener("gesturechange", (event) => {
 }, { passive: false });
 
 document.getElementById("item-add-cancel")?.addEventListener("click", () => {
-  closeTopUiLayer();
+  closeModal(itemAddModalEl);
 });
 
 locationAddItemButtonEl?.addEventListener("click", () => {
-  itemAddTarget = "location";
-  openModal(itemAddModalEl);
-  itemAddTextEl?.focus();
+  openItemAddModal("location");
 });
 
 inventoryAddItemButtonEl?.addEventListener("click", () => {
-  itemAddTarget = "inventory";
-  openModal(itemAddModalEl);
-  itemAddTextEl?.focus();
+  openItemAddModal("inventory");
 });
 
-document.getElementById("portal-add-here")?.addEventListener("click", async () => {
-  await placePortal();
+portalCreateOpenButtonEl?.addEventListener("click", () => {
+  if (isVirtualShiftActive()) {
+    notify("Portal creation is disabled while virtual shift is active.", "error", 2600);
+    return;
+  }
+  if (isPortalEditorDirty()) {
+    notify("Save or cancel current edits before starting a new portal.", "error", 2600);
+    return;
+  }
+  openPortalEditorForCreate();
   renderPortalModal();
+  portalNameInputEl?.focus();
+});
+
+portalEditNearbyButtonEl?.addEventListener("click", () => {
+  const nearest = getNearestPhysicalPortal();
+  if (!nearest) {
+    notify("No nearby portal to edit.", "error", 2200);
+    return;
+  }
+  openPortalEditorForUpdate(nearest);
+  renderPortalModal();
+  portalNameInputEl?.focus();
 });
 
 document.getElementById("portal-add-favorite")?.addEventListener("click", () => {
@@ -4239,37 +4373,88 @@ document.getElementById("portal-add-favorite")?.addEventListener("click", () => 
 });
 
 portalLoadNearestButtonEl?.addEventListener("click", () => {
+  if (portalEditorMode !== "update") {
+    notify("Load nearest is available in Edit mode.", "info", 2200);
+    return;
+  }
+  if (isPortalEditorDirty() && portalEditorTargetId) {
+    notify("Save or clear your current portal edits before loading another portal.", "error", 2600);
+    return;
+  }
   const nearest = getNearestPhysicalPortal();
   if (!nearest) {
     notify("No nearby portal to load.", "error", 2200);
     return;
   }
-  setPortalEditorTarget(nearest, { prefill: true });
+  openPortalEditorForUpdate(nearest);
+  renderPortalModal();
   notify("Loaded nearest portal into editor.", "info", 1800);
+});
+
+portalEditorSaveButtonEl?.addEventListener("click", async () => {
+  if (portalEditorMode === "create") {
+    const created = await placePortal();
+    if (created) {
+      closePortalEditor();
+      renderPortalModal();
+    }
+    return;
+  }
+
+  if (portalEditorMode === "update") {
+    const updated = await updatePortalDetails();
+    if (updated) {
+      closePortalEditor();
+      renderPortalModal();
+    }
+  }
+});
+
+portalEditorCancelButtonEl?.addEventListener("click", () => {
+  if (isPortalEditorDirty()) {
+    notify("Portal edit cancelled.", "info", 1800);
+  }
+  closePortalEditor();
+  renderPortalModal();
 });
 
 portalContentImageEl?.addEventListener("change", () => {
   const picked = portalContentImageEl.files?.[0] || null;
   if (!portalContentImagePreviewEl) return;
   if (!picked) {
+    portalEditorHasPendingChanges = isPortalEditorDirty();
     const target = getPortalEditorTargetPortal();
     renderPortalEditorPreview(target);
     return;
   }
   portalEditorImageClearRequested = false;
+  portalEditorHasPendingChanges = true;
   portalContentImagePreviewEl.src = URL.createObjectURL(picked);
   portalContentImagePreviewEl.hidden = false;
 });
 
 portalContentImageRemoveButtonEl?.addEventListener("click", () => {
   const target = getPortalEditorTargetPortal();
-  if (!target) {
+  if (portalEditorMode !== "create" && !target) {
     notify("No nearby portal selected for image removal.", "error", 2200);
     return;
   }
   portalEditorImageClearRequested = true;
+  portalEditorHasPendingChanges = true;
   if (portalContentImageEl) portalContentImageEl.value = "";
   renderPortalEditorPreview(target);
+});
+
+portalNameInputEl?.addEventListener("input", () => {
+  portalEditorHasPendingChanges = true;
+});
+
+portalContentTextEl?.addEventListener("input", () => {
+  portalEditorHasPendingChanges = true;
+});
+
+portalContentUrlEl?.addEventListener("input", () => {
+  portalEditorHasPendingChanges = true;
 });
 
 document.getElementById("portal-clear-link")?.addEventListener("click", () => {
@@ -4548,7 +4733,7 @@ function deleteInventoryItem(item) {
 async function pickUpItem(item) {
   if (item.type === "favorite_portal_item" && inventoryHasFavoritePortal(item.favorite_portal_id)) {
     notify("This portal is already in your favourites.", "info", 2600);
-    return;
+    return false;
   }
 
   try {
@@ -4558,11 +4743,11 @@ async function pickUpItem(item) {
     );
     if (!response.ok) {
       notify(`Could not pick up item: ${await response.text()}`, "error", 4000);
-      return;
+      return false;
     }
   } catch {
     notify("Network error picking up item. Try again.", "error");
-    return;
+    return false;
   }
 
   if (item.type === "favorite_portal_item") {
@@ -4587,6 +4772,7 @@ async function pickUpItem(item) {
   renderInventory();
   const virtual = getVirtualPosition();
   if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
+  return true;
 }
 
 async function removePortalItem(item) {
@@ -4674,7 +4860,6 @@ async function replayInventoryItem(item, editedName, editedText, editedUrl) {
   } else {
     removeFromInventory(item.id);
   }
-  await replayQueue();
   const virtual2 = getVirtualPosition();
   if (virtual2) await loadNearby(virtual2.lat, virtual2.lng, false);
   renderInventory();
@@ -4712,58 +4897,18 @@ function renderInventory() {
       li.appendChild(portalMeta);
     }
 
-    let nameInputEl = null;
-    let textareaEl = null;
-    let urlInputEl = null;
-
     if (item.type === "visit_counter") {
       const counterMeta = document.createElement("div");
       counterMeta.className = "visit-counter-card";
       counterMeta.innerHTML = `<div class="visit-counter-count">Viewed <strong>${Number.isFinite(item.visit_count) ? item.visit_count : 0}</strong> time${(Number.isFinite(item.visit_count) ? item.visit_count : 0) === 1 ? "" : "s"}</div>`;
       li.appendChild(counterMeta);
     } else {
-      nameInputEl = document.createElement("input");
-      nameInputEl.type = "text";
-      nameInputEl.className = "inventory-name-input";
-      nameInputEl.placeholder = item.type === "favorite_portal_item" ? "Optional title" : "Optional name";
-      nameInputEl.value = item.content_name || "";
-      nameInputEl.addEventListener("input", () => {
-        const nextValue = nameInputEl.value;
-        if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_name: nextValue });
-        else updateInventoryItem(item.id, { content_name: nextValue });
-      });
-      li.appendChild(nameInputEl);
-
-      textareaEl = document.createElement("textarea");
-      textareaEl.className = "inventory-textarea";
-      textareaEl.rows = INVENTORY_TEXTAREA_MIN_ROWS;
-      textareaEl.placeholder = item.type === "favorite_portal_item" ? "Optional note for this favourite portal" : "Optional note";
-      textareaEl.value = item.content_text || "";
-      const applyBounds = () => autoResizeTextareaWithinRows(
-        textareaEl,
-        INVENTORY_TEXTAREA_MIN_ROWS,
-        INVENTORY_TEXTAREA_MAX_ROWS
-      );
-      textareaEl.addEventListener("input", () => {
-        applyBounds();
-        const nextValue = textareaEl.value;
-        if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_text: nextValue });
-        else updateInventoryItem(item.id, { content_text: nextValue });
-      });
-      li.appendChild(textareaEl);
-      requestAnimationFrame(applyBounds);
-
-      urlInputEl = document.createElement("input");
-      urlInputEl.type = "url";
-      urlInputEl.className = "inventory-url-input";
-      urlInputEl.placeholder = "Optional URL";
-      urlInputEl.value = item.content_url || "";
-      urlInputEl.addEventListener("input", () => {
-        const nextValue = urlInputEl.value;
-        if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_url: nextValue });
-        else updateInventoryItem(item.id, { content_url: nextValue });
-      });
-      li.appendChild(urlInputEl);
+      if (item.content_text) {
+        const text = document.createElement("p");
+        text.className = "item-content-text";
+        text.textContent = item.content_text;
+        li.appendChild(text);
+      }
 
       const safeInventoryUrl = sanitizeExternalHttpUrl(item.content_url);
       if (safeInventoryUrl) {
@@ -4776,50 +4921,29 @@ function renderInventory() {
         li.appendChild(link);
       }
 
-      if (item.content_upload_path || item.content_data_url) {
+      const imageSrc = item.content_upload_path || item.content_data_url;
+      if (imageSrc) {
         const img = document.createElement("img");
         img.className = "item-photo item-photo--inventory";
-        img.src = item.content_upload_path || item.content_data_url;
+        img.src = imageSrc;
         img.alt = "media";
         if (item.content_upload_path) {
           img.addEventListener("error", () => reconcileMissingItem(item.id), { once: true });
         }
-        makeThumbnailOpenable(img, item.content_upload_path || item.content_data_url, getInventoryEntryTitle(item));
+        makeThumbnailOpenable(img, imageSrc, getInventoryEntryTitle(item));
         li.appendChild(img);
-      }
-
-      const imageInputEl = document.createElement("input");
-      imageInputEl.type = "file";
-      imageInputEl.accept = "image/*";
-      imageInputEl.className = "inventory-image-input";
-      imageInputEl.addEventListener("change", async () => {
-        const file = imageInputEl.files?.[0] || null;
-        if (!file) return;
-        const dataUrl = await fileToDataUrl(file);
-        if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_data_url: dataUrl });
-        else updateInventoryItem(item.id, { content_data_url: dataUrl, content_upload_path: null });
-        renderInventory();
-      });
-      li.appendChild(imageInputEl);
-
-      if (item.content_upload_path || item.content_data_url) {
-        const clearImageButton = document.createElement("button");
-        clearImageButton.type = "button";
-        clearImageButton.textContent = "Remove Image";
-        clearImageButton.addEventListener("click", () => {
-          if (item.inventorySource === "favorite") updatePortalFavorite(item.portalId, { content_data_url: null });
-          else updateInventoryItem(item.id, { content_data_url: null, content_upload_path: null });
-          renderInventory();
-        });
-        li.appendChild(clearImageButton);
       }
     }
 
     const actions = document.createElement("div");
     actions.className = "inventory-actions";
 
+    if (item.type !== "visit_counter") {
+      appendItemActionButton(actions, "✎ Edit", () => openInventoryEditorForEntry(item.id));
+    }
+
     appendItemActionButton(actions, "Place here", () => {
-      replayInventoryItem(item, nameInputEl?.value, textareaEl?.value, urlInputEl?.value);
+      replayInventoryItem(item);
     });
 
     appendItemActionButton(actions, "Delete", () => deleteInventoryItem(item));
@@ -4834,6 +4958,98 @@ function renderInventory() {
 
 itemAddFormEl?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (itemFormMode === "edit") {
+    const target = itemEditEntryId
+      ? (
+        itemEditSource === "location"
+          ? state.nearbyItems.find((entry) => entry.id === itemEditEntryId)
+          : getInventoryEntries().find((entry) => entry.id === itemEditEntryId)
+      )
+      : null;
+    if (!target) {
+      notify("Item not available for editing.", "error", 2200);
+      return;
+    }
+
+    const name = (itemAddNameEl?.value || "").trim();
+    const text = (itemAddTextEl?.value || "").trim();
+    const url = (itemAddUrlEl?.value || "").trim();
+    const photoFile = itemAddPhotoEl?.files?.[0] || null;
+
+    if (url && !sanitizeExternalHttpUrl(url)) {
+      notify("URL must be a valid http(s) URL.", "error", 2600);
+      return;
+    }
+
+    if (itemEditSource === "location") {
+      if (!state.physicalPosition) {
+        notify("GPS position needed to edit a world item.", "error", 2600);
+        return;
+      }
+
+      const form = new FormData();
+      form.append("actor_latitude", String(state.physicalPosition.lat));
+      form.append("actor_longitude", String(state.physicalPosition.lng));
+      form.append("content_name", name);
+      if (!name) form.append("content_name_clear", "true");
+      form.append("content_text", text);
+      if (!text) form.append("content_text_clear", "true");
+      if (url) {
+        form.append("content_url", url);
+      } else {
+        form.append("content_url_clear", "true");
+      }
+      if (photoFile) {
+        form.append("file", photoFile);
+      }
+
+      try {
+        const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/content`, {
+          method: "PATCH",
+          body: form,
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+      } catch (err) {
+        notify(parseErrorMessage(err) || "Could not update item in place.", "error", 3200);
+        return;
+      }
+
+      const virtual = getVirtualPosition();
+      if (virtual) {
+        await loadNearby(virtual.lat, virtual.lng, false);
+      }
+    } else {
+      const patch = {
+        content_name: normalizeOptionalText(name),
+        content_text: normalizeOptionalText(text),
+        content_url: normalizeOptionalUrl(url),
+      };
+
+      if (photoFile) {
+        patch.content_data_url = await fileToDataUrl(photoFile);
+        patch.content_upload_path = null;
+      } else {
+        patch.content_data_url = target.content_data_url ?? null;
+        patch.content_upload_path = target.content_upload_path ?? null;
+      }
+
+      if (target.inventorySource === "favorite") {
+        updatePortalFavorite(target.portalId, patch);
+        renderPortalModal();
+      } else {
+        updateInventoryItem(target.id, patch);
+      }
+
+      renderInventory();
+    }
+
+    notify("Item updated.", "success", 2000);
+    closeModal(itemAddModalEl);
+    return;
+  }
+
   const virtual = getVirtualPosition();
   const itemType = getAddItemType();
   const behavior = getItemFlowBehavior(itemType);
@@ -4890,11 +5106,7 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
     notify("Item added at this location.", "success", 2000);
   }
 
-  if (itemAddTextEl) itemAddTextEl.value = "";
-  if (itemAddNameEl) itemAddNameEl.value = "";
-  if (itemAddUrlEl) itemAddUrlEl.value = "";
-  if (itemAddPhotoEl) itemAddPhotoEl.value = "";
-  closeTopUiLayer();
+  closeModal(itemAddModalEl);
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -4925,7 +5137,6 @@ async function boot() {
     refreshLocationAndNearby(true);
   }
   beginGeolocation();
-  await replayQueue();
   await applySharedPortalLocationFromUrl();
   renderMenuShareQr(true);
 }

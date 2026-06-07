@@ -32,7 +32,7 @@ from app.spatial import haversine_meters
 from app.storage import FileStorage
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260606-08"
+ASSET_VERSION = "20260607-06"
 
 app.add_middleware(
     CORSMiddleware,
@@ -461,6 +461,93 @@ async def update_portal_details(
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
+        item.content_upload_path = upload_path
+
+    storage.save_item(item)
+    return item.model_dump(mode="json")
+
+
+@app.patch("/api/dimensions/{root_id}/items/{item_id}/content")
+async def update_world_item_content(
+    root_id: str,
+    item_id: str,
+    actor_latitude: float = Form(...),
+    actor_longitude: float = Form(...),
+    content_name: str | None = Form(default=None),
+    content_name_clear: str | None = Form(default=None),
+    content_text: str | None = Form(default=None),
+    content_text_clear: str | None = Form(default=None),
+    content_url: HttpUrl | None = Form(default=None),
+    content_url_clear: str | None = Form(default=None),
+    content_upload_clear: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+) -> dict:
+    item = storage.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.dimension_root_id != root_id:
+        raise HTTPException(status_code=403, detail="Item does not belong to this dimension")
+    if item.type not in {ItemType.MEDIA, ItemType.FAVORITE_PORTAL_ITEM}:
+        raise HTTPException(status_code=400, detail="Only media/favourite world items can be edited in place")
+
+    distance = haversine_meters(actor_latitude, actor_longitude, item.latitude, item.longitude)
+    if distance > AREA_OF_EFFECT_RADIUS_METERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Item updates require physical presence within {AREA_OF_EFFECT_RADIUS_METERS}m "
+                f"(current distance: {distance:.1f}m)."
+            ),
+        )
+
+    should_clear_name = _parse_form_flag(content_name_clear)
+    should_clear_text = _parse_form_flag(content_text_clear)
+    should_clear_url = _parse_form_flag(content_url_clear)
+    should_clear_upload = _parse_form_flag(content_upload_clear)
+
+    has_name = content_name is not None or should_clear_name
+    has_text = content_text is not None or should_clear_text
+    has_url = content_url is not None or should_clear_url
+    has_file = file is not None
+    has_upload_clear = should_clear_upload
+
+    if not (has_name or has_text or has_url or has_file or has_upload_clear):
+        raise HTTPException(status_code=400, detail="Provide at least one content field to update")
+
+    if content_name is not None and content_name.strip() == "" and not should_clear_name:
+        raise HTTPException(status_code=400, detail="content_name cannot be blank when provided")
+
+    if should_clear_name:
+        item.content_name = None
+    elif content_name is not None:
+        item.content_name = content_name.strip() if content_name.strip() else None
+
+    if should_clear_text:
+        item.content_text = None
+    elif content_text is not None:
+        item.content_text = content_text.strip() if content_text.strip() else None
+
+    if should_clear_url:
+        item.content_url = None
+    elif content_url is not None:
+        item.content_url = content_url
+
+    if should_clear_upload:
+        item.content_upload_path = None
+
+    if file is not None:
+        suffix = Path(file.filename or "upload.bin").suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            content = await file.read()
+            tmp.write(content)
+
+        try:
+            upload_path = storage.save_upload(tmp_path, file.filename or "upload.bin")
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
         item.content_upload_path = upload_path
 
     storage.save_item(item)
