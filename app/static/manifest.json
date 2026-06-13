@@ -1,6 +1,7 @@
 {
   "name": "Quipu MVP",
   "short_name": "Quipu",
+  "version": "__ASSET_VERSION__",
   "start_url": "/?homescreen=1",
   "display": "standalone",
   "background_color": "#6d16ee",
