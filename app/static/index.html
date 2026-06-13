@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Quipu MVP</title>
     <link rel="icon" href="/static/appicon.png?v=__ASSET_VERSION__" />
+    <link rel="manifest" href="/static/manifest.json" />
+    <meta name="theme-color" content="#ffffff" />
     <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v=__ASSET_VERSION__" />
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
   </head>
@@ -71,6 +73,45 @@
           <button id="action-open-portals">Portals</button>
           <button id="action-open-debug">Debug</button>
           <button id="action-close-player-menu">Close</button>
+        </div>
+      </section>
+
+      <section id="lockbox-modal" class="app-modal nested-modal" aria-label="Lock Box" aria-hidden="true">
+        <div class="app-modal-header">
+          <h2 id="lockbox-modal-title">Lock Box</h2>
+          <button id="lockbox-modal-close" class="modal-close" type="button">Close</button>
+        </div>
+        <div id="lockbox-locked-view" class="lockbox-locked-view">
+          <p id="lockbox-locked-message" class="lockbox-hint">Enter the numeric code to unlock this box.</p>
+          <label class="lockbox-code-label">
+            Code
+            <input id="lockbox-code-input" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="64" placeholder="Numeric code" />
+          </label>
+          <div class="button-row button-row-2">
+            <button id="lockbox-unlock-button" type="button">Unlock</button>
+            <button id="lockbox-locked-cancel" type="button">Cancel</button>
+          </div>
+        </div>
+        <div id="lockbox-unlocked-view" class="lockbox-unlocked-view" hidden>
+          <p id="lockbox-unlocked-summary" class="lockbox-hint"></p>
+          <div class="lockbox-columns">
+            <section class="items-column">
+              <div class="items-column-header">
+                <h3 id="lockbox-contents-heading">In This Box</h3>
+              </div>
+              <ul id="lockbox-contents-list" class="modal-list"></ul>
+            </section>
+            <section class="items-column">
+              <div class="items-column-header">
+                <h3>Your Inventory</h3>
+              </div>
+              <ul id="lockbox-inventory-list" class="modal-list"></ul>
+            </section>
+          </div>
+          <div class="button-row button-row-2">
+            <button id="lockbox-save" type="button">Save &amp; Lock</button>
+            <button id="lockbox-cancel" type="button">Cancel</button>
+          </div>
         </div>
       </section>
 
@@ -207,6 +248,7 @@
             <select id="item-add-type">
               <option value="media" selected>Media</option>
               <option value="visit_counter">Visit Counter</option>
+              <option value="lock_box">Lock Box</option>
             </select>
           </label>
           <div id="item-add-media-fields">
@@ -225,6 +267,28 @@
             <label>
               Image
               <input id="item-add-photo" type="file" accept="image/*" />
+            </label>
+          </div>
+          <div class="item-add-lockbox-field" hidden>
+            <label>
+              Box name
+              <input id="item-add-box-name" type="text" maxlength="128" placeholder="Optional box name" />
+            </label>
+            <label>
+              Description
+              <textarea id="item-add-box-description" rows="3" maxlength="2000" placeholder="Optional description"></textarea>
+            </label>
+            <label>
+              Image URL
+              <input id="item-add-box-image" type="url" maxlength="2048" placeholder="https://example.com/image.jpg" />
+            </label>
+            <label>
+              Box code (digits)
+              <input id="item-add-box-code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="32" placeholder="Numeric code" />
+            </label>
+            <label>
+              Box URL
+              <input id="item-add-box-url" type="url" maxlength="2048" placeholder="https://example.com" />
             </label>
           </div>
           <div class="button-row button-row-2">

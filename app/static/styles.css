@@ -38,6 +38,7 @@
   --map-favorite: #244637;
   --map-media: #ff8a00;
   --map-visit-counter: #0073ff;
+  --map-lockbox: #b5651d;
   --portal-line: #050505;
   --map-tiles-filter: none;
   --leaflet-control-bg: #ffffff;
@@ -95,6 +96,7 @@
   --map-favorite: #27f4ff;
   --map-media: #ff8a00;
   --map-visit-counter: #0073ff;
+  --map-lockbox: #ffc24b;
   --portal-line: #ff43d0;
   --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
   --leaflet-control-bg: rgba(3, 3, 3, 0.98);
@@ -155,6 +157,7 @@
     --map-favorite: #27f4ff;
     --map-media: #ff8a00;
     --map-visit-counter: #0073ff;
+    --map-lockbox: #ffc24b;
     --portal-line: #ff43d0;
     --map-tiles-filter: brightness(0.62) invert(1) contrast(2.4) hue-rotate(185deg) saturate(0.45) brightness(0.88);
     --leaflet-control-bg: rgba(3, 3, 3, 0.98);
@@ -726,6 +729,10 @@ h2 {
 
 .item-type-badge--portal {
   background: color-mix(in srgb, var(--map-portal) 22%, var(--panel) 78%);
+}
+
+.item-type-badge--lockbox {
+  background: color-mix(in srgb, var(--map-lockbox) 26%, var(--panel) 74%);
 }
 
 #location-items-list li > small {
@@ -1409,3 +1416,126 @@ button:focus-visible {
     margin-top: calc(max(0.75rem, env(safe-area-inset-top)) + 3.5rem);
   }
 }
+
+/* ── Lock Box ─────────────────────────────────────────────────────────────── */
+.lockbox-map-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--map-lockbox);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+}
+
+.lockbox-map-icon svg {
+  width: 26px;
+  height: 26px;
+  fill: var(--map-lockbox);
+  stroke: color-mix(in srgb, var(--map-lockbox) 50%, #000 50%);
+  stroke-width: 0.75;
+}
+
+.lockbox-locked-view {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.4rem 0.1rem;
+}
+
+.lockbox-locked-view[hidden],
+.lockbox-unlocked-view[hidden] {
+  display: none;
+}
+
+.lockbox-hint {
+  color: var(--muted);
+  margin: 0;
+}
+
+.lockbox-code-label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.lockbox-code-label input {
+  letter-spacing: 0.35em;
+  font-size: 1.1rem;
+}
+
+.lockbox-unlocked-view {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.lockbox-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+
+.lockbox-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.6rem;
+}
+
+.lockbox-entry-thumb {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.lockbox-entry-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.lockbox-entry-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.lockbox-entry-title .item-type-badge {
+  flex: 0 0 auto;
+}
+
+.lockbox-entry-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lockbox-entry-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.lockbox-entry-action {
+  flex: 1 0 100%;
+  white-space: nowrap;
+}
+
+.lockbox-entry-action {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.lockbox-empty-note {
+  color: var(--muted);
+  font-style: italic;
+}
+

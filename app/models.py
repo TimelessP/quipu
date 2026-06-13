@@ -12,6 +12,7 @@ class ItemType(str, Enum):
     VISIT_COUNTER = "visit_counter"
     PORTAL_MARKER = "portal_marker"
     FAVORITE_PORTAL_ITEM = "favorite_portal_item"
+    LOCK_BOX = "lock_box"
 
 
 class ItemDocument(BaseModel):
@@ -55,6 +56,15 @@ class FavoritePortalItemDocument(ContentItemDocument):
     favorite_portal_name: str | None = None
 
 
+class LockBoxItemDocument(ItemDocument):
+    type: Literal[ItemType.LOCK_BOX]  # pyright: ignore[reportIncompatibleVariableOverride]
+    box_name: str | None = Field(default=None, max_length=128)
+    box_description: str | None = Field(default=None, max_length=2000)
+    box_image: HttpUrl | None = None
+    box_url: HttpUrl | None = None
+    encrypted_contents: str | None = None
+
+
 class BasePlacementRequest(BaseModel):
     owner: str = Field(min_length=1, max_length=128)
     latitude: float = Field(ge=-90, le=90)
@@ -94,12 +104,22 @@ class PlaceFavoritePortalItemRequest(BasePlacementRequest):
     content_upload_path: str | None = None
 
 
+class PlaceLockBoxItemRequest(BasePlacementRequest):
+    type: Literal[ItemType.LOCK_BOX]
+    box_name: str | None = Field(default=None, max_length=128)
+    box_description: str | None = Field(default=None, max_length=2000)
+    box_image: HttpUrl | None = None
+    box_url: HttpUrl | None = None
+    encrypted_contents: str | None = None
+
+
 PlaceItemRequest = Annotated[
     Union[
         PlaceMediaItemRequest,
         PlaceVisitCounterItemRequest,
         PlacePortalMarkerItemRequest,
         PlaceFavoritePortalItemRequest,
+        PlaceLockBoxItemRequest,
     ],
     Field(discriminator="type"),
 ]
@@ -121,7 +141,7 @@ class PlacePhotoItemRequest(BaseModel):
 
 
 ItemPayload = Annotated[
-    Union[MediaItemDocument, VisitCounterItemDocument, PortalMarkerItemDocument, FavoritePortalItemDocument],
+    Union[ItemDocument, MediaItemDocument, VisitCounterItemDocument, PortalMarkerItemDocument, FavoritePortalItemDocument, LockBoxItemDocument],
     Field(discriminator="type"),
 ]
 

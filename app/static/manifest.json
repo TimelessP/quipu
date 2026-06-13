@@ -1,0 +1,36 @@
+{
+  "name": "Quipu MVP",
+  "short_name": "Quipu",
+  "start_url": "/?homescreen=1",
+  "display": "standalone",
+  "background_color": "#6d16ee",
+  "theme_color": "#6d16ee",
+  "icons": [
+    {
+      "src": "/static/appicon.png?v=__ASSET_VERSION__",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/appicon.png?v=__ASSET_VERSION__",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/appicon.png?v=__ASSET_VERSION__",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/appicon.png?v=__ASSET_VERSION__",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/appicon.png?v=__ASSET_VERSION__",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

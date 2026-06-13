@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 import h3
+import json
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -19,7 +20,9 @@ from app.models import (
     ItemDocument,
     ItemType,
     MediaItemDocument,
+    LockBoxItemDocument,
     PlaceFavoritePortalItemRequest,
+    PlaceLockBoxItemRequest,
     PlaceItemRequest,
     PlaceMediaItemRequest,
     PlacePortalMarkerItemRequest,
@@ -29,7 +32,8 @@ from app.models import (
     VisitCounterItemDocument,
 )
 from app.spatial import haversine_meters
-from app.storage import FileStorage
+from typing import cast
+import app.storage as storage_module
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
 ASSET_VERSION = "20260607-08"
@@ -102,7 +106,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault(csp_header_name, csp_policy)
     return response
 
-storage = FileStorage()
+storage = storage_module.FileStorage()
 MIN_PORTAL_SPACING_METERS = 8
 AREA_OF_EFFECT_RADIUS_METERS = config.AREA_OF_EFFECT_RADIUS_METERS
 PORTAL_NAME_RANGE_METERS = AREA_OF_EFFECT_RADIUS_METERS
@@ -188,14 +192,12 @@ def _validate_upload_path(upload_path: str) -> None:
 
 def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_path: str | None = None) -> ItemDocument:
     cell_id = h3.latlng_to_cell(request.latitude, request.longitude, config.H3_RESOLUTION)
-    common_kwargs = dict(
-        id=str(uuid.uuid4()),
-        owner=request.owner,
-        latitude=request.latitude,
-        longitude=request.longitude,
-        accuracy_meters=request.accuracy_meters,
-        dimension_root_id=root_id,
-    )
+    id_ = str(uuid.uuid4())
+    owner_ = str(request.owner)
+    latitude_ = float(request.latitude)
+    longitude_ = float(request.longitude)
+    accuracy_meters_ = request.accuracy_meters
+    dimension_root_id_ = root_id
 
     if isinstance(request, PlaceMediaItemRequest):
         content_upload_path = upload_path or request.content_upload_path
@@ -203,32 +205,50 @@ def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_pa
             _validate_upload_path(content_upload_path)
         if not (request.content_name or request.content_text or request.content_url or content_upload_path):
             raise HTTPException(status_code=400, detail="Media items need at least one content field")
-        item = MediaItemDocument(
-            type=ItemType.MEDIA,
-            content_name=request.content_name.strip() if request.content_name else None,
-            content_text=request.content_text,
-            content_url=request.content_url,
-            content_upload_path=content_upload_path,
-            **common_kwargs,
-        )
+        payload = {
+            "id": id_,
+            "type": ItemType.MEDIA,
+            "owner": owner_,
+            "latitude": latitude_,
+            "longitude": longitude_,
+            "accuracy_meters": accuracy_meters_,
+            "dimension_root_id": dimension_root_id_,
+            "content_name": request.content_name.strip() if request.content_name else None,
+            "content_text": request.content_text,
+            "content_url": request.content_url,
+            "content_upload_path": content_upload_path,
+        }
+        item = MediaItemDocument.model_validate(payload)
     elif isinstance(request, PlaceVisitCounterItemRequest):
-        item = VisitCounterItemDocument(
-            type=ItemType.VISIT_COUNTER,
-            visit_counter_name=request.visit_counter_name.strip() if request.visit_counter_name else None,
-            visit_count=0,
-            **common_kwargs,
-        )
+        payload = {
+            "id": id_,
+            "type": ItemType.VISIT_COUNTER,
+            "owner": owner_,
+            "latitude": latitude_,
+            "longitude": longitude_,
+            "accuracy_meters": accuracy_meters_,
+            "dimension_root_id": dimension_root_id_,
+            "visit_counter_name": request.visit_counter_name.strip() if request.visit_counter_name else None,
+            "visit_count": 0,
+        }
+        item = VisitCounterItemDocument.model_validate(payload)
     elif isinstance(request, PlacePortalMarkerItemRequest):
         if upload_path:
             _validate_upload_path(upload_path)
-        item = PortalMarkerItemDocument(
-            type=ItemType.PORTAL_MARKER,
-            portal_name=request.portal_name.strip() if request.portal_name else None,
-            content_text=request.content_text.strip() if request.content_text and request.content_text.strip() else None,
-            content_url=request.content_url,
-            content_upload_path=upload_path,
-            **common_kwargs,
-        )
+        payload = {
+            "id": id_,
+            "type": ItemType.PORTAL_MARKER,
+            "owner": owner_,
+            "latitude": latitude_,
+            "longitude": longitude_,
+            "accuracy_meters": accuracy_meters_,
+            "dimension_root_id": dimension_root_id_,
+            "portal_name": request.portal_name.strip() if request.portal_name else None,
+            "content_text": request.content_text.strip() if request.content_text and request.content_text.strip() else None,
+            "content_url": request.content_url,
+            "content_upload_path": upload_path,
+        }
+        item = PortalMarkerItemDocument.model_validate(payload)
     elif isinstance(request, PlaceFavoritePortalItemRequest):
         if not request.favorite_portal_id:
             raise HTTPException(status_code=400, detail="favorite_portal_id is required for favorite portal items")
@@ -237,18 +257,40 @@ def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_pa
         content_upload_path = upload_path or request.content_upload_path
         if content_upload_path:
             _validate_upload_path(content_upload_path)
-        item = FavoritePortalItemDocument(
-            type=ItemType.FAVORITE_PORTAL_ITEM,
-            favorite_portal_id=request.favorite_portal_id,
-            favorite_portal_latitude=request.favorite_portal_latitude,
-            favorite_portal_longitude=request.favorite_portal_longitude,
-            favorite_portal_name=request.favorite_portal_name.strip() if request.favorite_portal_name else None,
-            content_name=request.content_name.strip() if request.content_name else None,
-            content_text=request.content_text,
-            content_url=request.content_url,
-            content_upload_path=content_upload_path,
-            **common_kwargs,
-        )
+        payload = {
+            "id": id_,
+            "type": ItemType.FAVORITE_PORTAL_ITEM,
+            "owner": owner_,
+            "latitude": latitude_,
+            "longitude": longitude_,
+            "accuracy_meters": accuracy_meters_,
+            "dimension_root_id": dimension_root_id_,
+            "favorite_portal_id": request.favorite_portal_id,
+            "favorite_portal_latitude": request.favorite_portal_latitude,
+            "favorite_portal_longitude": request.favorite_portal_longitude,
+            "favorite_portal_name": request.favorite_portal_name.strip() if request.favorite_portal_name else None,
+            "content_name": request.content_name.strip() if request.content_name else None,
+            "content_text": request.content_text,
+            "content_url": request.content_url,
+            "content_upload_path": content_upload_path,
+        }
+        item = FavoritePortalItemDocument.model_validate(payload)
+    elif isinstance(request, PlaceLockBoxItemRequest):
+        payload = {
+            "id": id_,
+            "type": ItemType.LOCK_BOX,
+            "owner": owner_,
+            "latitude": latitude_,
+            "longitude": longitude_,
+            "accuracy_meters": accuracy_meters_,
+            "dimension_root_id": dimension_root_id_,
+            "box_name": request.box_name.strip() if request.box_name else None,
+            "box_description": request.box_description,
+            "box_image": request.box_image,
+            "box_url": request.box_url,
+            "encrypted_contents": request.encrypted_contents or None,
+        }
+        item = LockBoxItemDocument.model_validate(payload)
     else:
         raise HTTPException(status_code=400, detail="Unsupported item type")
 
@@ -361,9 +403,10 @@ def increment_visit_counter(root_id: str, item_id: str) -> dict:
     if item.type != ItemType.VISIT_COUNTER:
         raise HTTPException(status_code=400, detail="Only visit counters can be incremented")
 
-    item.visit_count += 1
-    storage.save_item(item)
-    return item.model_dump(mode="json")
+    vc = cast(VisitCounterItemDocument, item)
+    vc.visit_count += 1
+    storage.save_item(vc)
+    return vc.model_dump(mode="json")
 
 
 @app.patch("/api/dimensions/{root_id}/items/{item_id}/portal-name")
@@ -386,9 +429,10 @@ def rename_portal(root_id: str, item_id: str, request: RenamePortalRequest) -> d
             ),
         )
 
-    item.portal_name = request.portal_name.strip()
-    storage.save_item(item)
-    return item.model_dump(mode="json")
+    portal = cast(PortalMarkerItemDocument, item)
+    portal.portal_name = request.portal_name.strip()
+    storage.save_item(portal)
+    return portal.model_dump(mode="json")
 
 
 @app.patch("/api/dimensions/{root_id}/items/{item_id}/portal-details")
@@ -437,17 +481,18 @@ async def update_portal_details(
     if portal_name is not None and portal_name.strip() == "":
         raise HTTPException(status_code=400, detail="portal_name cannot be blank when provided")
 
+    portal = cast(PortalMarkerItemDocument, item)
     if portal_name is not None and portal_name.strip() != "":
-        item.portal_name = portal_name.strip()
+        portal.portal_name = portal_name.strip()
     if content_text is not None:
-        item.content_text = content_text.strip() if content_text.strip() else None
+        portal.content_text = content_text.strip() if content_text.strip() else None
     if should_clear_content_url:
-        item.content_url = None
+        portal.content_url = None
     elif content_url is not None:
-        item.content_url = content_url
+        portal.content_url = content_url
 
     if should_clear_content_upload:
-        item.content_upload_path = None
+        portal.content_upload_path = None
 
     if file is not None:
         suffix = Path(file.filename or "upload.bin").suffix
@@ -461,10 +506,10 @@ async def update_portal_details(
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
-        item.content_upload_path = upload_path
+        portal.content_upload_path = upload_path
 
-    storage.save_item(item)
-    return item.model_dump(mode="json")
+    storage.save_item(portal)
+    return portal.model_dump(mode="json")
 
 
 @app.patch("/api/dimensions/{root_id}/items/{item_id}/content")
@@ -518,22 +563,48 @@ async def update_world_item_content(
         raise HTTPException(status_code=400, detail="content_name cannot be blank when provided")
 
     if should_clear_name:
-        item.content_name = None
+        # item may be MediaItemDocument or FavoritePortalItemDocument
+        if item.type == ItemType.MEDIA:
+            media = cast(MediaItemDocument, item)
+            media.content_name = None
+        else:
+            fav = cast(FavoritePortalItemDocument, item)
+            fav.content_name = None
     elif content_name is not None:
-        item.content_name = content_name.strip() if content_name.strip() else None
+        if item.type == ItemType.MEDIA:
+            media = cast(MediaItemDocument, item)
+            media.content_name = content_name.strip() if content_name.strip() else None
+        else:
+            fav = cast(FavoritePortalItemDocument, item)
+            fav.content_name = content_name.strip() if content_name.strip() else None
 
     if should_clear_text:
-        item.content_text = None
+        if item.type == ItemType.MEDIA:
+            cast(MediaItemDocument, item).content_text = None
+        else:
+            cast(FavoritePortalItemDocument, item).content_text = None
     elif content_text is not None:
-        item.content_text = content_text.strip() if content_text.strip() else None
+        if item.type == ItemType.MEDIA:
+            cast(MediaItemDocument, item).content_text = content_text.strip() if content_text.strip() else None
+        else:
+            cast(FavoritePortalItemDocument, item).content_text = content_text.strip() if content_text.strip() else None
 
     if should_clear_url:
-        item.content_url = None
+        if item.type == ItemType.MEDIA:
+            cast(MediaItemDocument, item).content_url = None
+        else:
+            cast(FavoritePortalItemDocument, item).content_url = None
     elif content_url is not None:
-        item.content_url = content_url
+        if item.type == ItemType.MEDIA:
+            cast(MediaItemDocument, item).content_url = content_url
+        else:
+            cast(FavoritePortalItemDocument, item).content_url = content_url
 
     if should_clear_upload:
-        item.content_upload_path = None
+        if item.type == ItemType.MEDIA:
+            cast(MediaItemDocument, item).content_upload_path = None
+        else:
+            cast(FavoritePortalItemDocument, item).content_upload_path = None
 
     if file is not None:
         suffix = Path(file.filename or "upload.bin").suffix
@@ -548,7 +619,10 @@ async def update_world_item_content(
             if tmp_path.exists():
                 tmp_path.unlink()
 
-        item.content_upload_path = upload_path
+        if item.type == ItemType.MEDIA:
+            cast(MediaItemDocument, item).content_upload_path = upload_path
+        else:
+            cast(FavoritePortalItemDocument, item).content_upload_path = upload_path
 
     storage.save_item(item)
     return item.model_dump(mode="json")
@@ -597,37 +671,39 @@ async def place_media(
             tmp_path.unlink()
 
     if item_type == ItemType.MEDIA:
-        item = MediaItemDocument(
-            id=str(uuid.uuid4()),
-            type=item_type,
-            owner=owner,
-            latitude=latitude,
-            longitude=longitude,
-            accuracy_meters=accuracy_meters,
-            content_name=content_name.strip() if content_name else None,
-            content_text=content_text,
-            content_url=content_url,
-            content_upload_path=upload_path,
-            dimension_root_id=root_id,
-        )
+        payload = {
+            "id": str(uuid.uuid4()),
+            "type": item_type,
+            "owner": owner,
+            "latitude": latitude,
+            "longitude": longitude,
+            "accuracy_meters": accuracy_meters,
+            "content_name": content_name.strip() if content_name else None,
+            "content_text": content_text,
+            "content_url": content_url,
+            "content_upload_path": upload_path,
+            "dimension_root_id": root_id,
+        }
+        item = MediaItemDocument.model_validate(payload)
     else:
-        item = FavoritePortalItemDocument(
-            id=str(uuid.uuid4()),
-            type=item_type,
-            owner=owner,
-            latitude=latitude,
-            longitude=longitude,
-            accuracy_meters=accuracy_meters,
-            favorite_portal_id=favorite_portal_id,
-            favorite_portal_latitude=favorite_portal_latitude,
-            favorite_portal_longitude=favorite_portal_longitude,
-            favorite_portal_name=favorite_portal_name.strip() if favorite_portal_name else None,
-            content_name=content_name.strip() if content_name else None,
-            content_text=content_text,
-            content_url=content_url,
-            content_upload_path=upload_path,
-            dimension_root_id=root_id,
-        )
+        payload = {
+            "id": str(uuid.uuid4()),
+            "type": item_type,
+            "owner": owner,
+            "latitude": latitude,
+            "longitude": longitude,
+            "accuracy_meters": accuracy_meters,
+            "favorite_portal_id": favorite_portal_id,
+            "favorite_portal_latitude": favorite_portal_latitude,
+            "favorite_portal_longitude": favorite_portal_longitude,
+            "favorite_portal_name": favorite_portal_name.strip() if favorite_portal_name else None,
+            "content_name": content_name.strip() if content_name else None,
+            "content_text": content_text,
+            "content_url": content_url,
+            "content_upload_path": upload_path,
+            "dimension_root_id": root_id,
+        }
+        item = FavoritePortalItemDocument.model_validate(payload)
 
     storage.save_item(item)
     storage.add_item_to_cell(root_id=root_id, cell_id=cell_id, item_id=item.id)
@@ -640,6 +716,81 @@ def get_cell_item_ids(root_id: str, cell_id: str) -> dict:
     if cell is None:
         return {"item_ids": []}
     return {"item_ids": list(cell.get("item_ids", []))}
+
+
+# Lock box contents are encrypted and decrypted entirely on the client. The
+# client reads the opaque `encrypted_contents` blob via GET /api/items/{id} and
+# writes it back through set-contents below. The server never sees the numeric
+# code or the decrypted contents.
+@app.post("/api/dimensions/{root_id}/items/{item_id}/set-contents")
+def set_lock_box_contents(root_id: str, item_id: str, actor: str = Form(...), encrypted_contents: str = Form(...)) -> dict:
+    """
+    Persist the provided encrypted payload for the lock box. The server does not accept or inspect plaintext contents or codes.
+    Responsibility for validating ownership of moved items is on the client when constructing the encrypted payload.
+    """
+    item = storage.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.dimension_root_id != root_id:
+        raise HTTPException(status_code=403, detail="Item does not belong to this dimension")
+    if item.type != ItemType.LOCK_BOX:
+        raise HTTPException(status_code=400, detail="Only lock boxes can have contents set")
+
+    box = cast(LockBoxItemDocument, item)
+    box.encrypted_contents = encrypted_contents or ""
+    storage.save_item(box)
+    return {"ok": True}
+
+
+@app.patch("/api/dimensions/{root_id}/items/{item_id}/lockbox")
+def update_lock_box_metadata(
+    root_id: str,
+    item_id: str,
+    actor_latitude: float = Form(...),
+    actor_longitude: float = Form(...),
+    box_name: str | None = Form(default=None),
+    box_description: str | None = Form(default=None),
+    box_image: HttpUrl | None = Form(default=None),
+    box_image_clear: str | None = Form(default=None),
+    box_url: HttpUrl | None = Form(default=None),
+    box_url_clear: str | None = Form(default=None),
+) -> dict:
+    item = storage.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item.dimension_root_id != root_id:
+        raise HTTPException(status_code=403, detail="Item does not belong to this dimension")
+    if item.type != ItemType.LOCK_BOX:
+        raise HTTPException(status_code=400, detail="Only lock boxes can be updated with this endpoint")
+
+    distance = haversine_meters(actor_latitude, actor_longitude, item.latitude, item.longitude)
+    if distance > AREA_OF_EFFECT_RADIUS_METERS:
+        raise HTTPException(status_code=400, detail=f"Lock box updates require presence within {AREA_OF_EFFECT_RADIUS_METERS}m")
+
+    should_clear_image = _parse_form_flag(box_image_clear)
+    should_clear_url = _parse_form_flag(box_url_clear)
+
+    if box_name is not None and box_name.strip() == "":
+        raise HTTPException(status_code=400, detail="box_name cannot be blank when provided")
+
+    box = cast(LockBoxItemDocument, item)
+    if box_name is not None:
+        box.box_name = box_name.strip() if box_name.strip() else None
+    if box_description is not None:
+        box.box_description = box_description.strip() if box_description.strip() else None
+
+    if should_clear_image:
+        box.box_image = None
+    elif box_image is not None:
+        box.box_image = box_image
+
+    if should_clear_url:
+        box.box_url = None
+    elif box_url is not None:
+        box.box_url = box_url
+
+    storage.save_item(box)
+    return box.model_dump(mode="json")
 
 
 

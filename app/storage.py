@@ -11,14 +11,16 @@ from app import config
 from app.models import (
     FavoritePortalItemDocument,
     ItemDocument,
+    ItemPayload,
     ItemType,
+    LockBoxItemDocument,
     MediaItemDocument,
     PortalMarkerItemDocument,
     VisitCounterItemDocument,
 )
 
 
-def _parse_item_document(payload: dict[str, Any]) -> ItemDocument:
+def _parse_item_document(payload: dict[str, Any]) -> ItemPayload:
     item_type = payload.get("type")
     if item_type == ItemType.MEDIA.value:
         return MediaItemDocument.model_validate(payload)
@@ -28,6 +30,8 @@ def _parse_item_document(payload: dict[str, Any]) -> ItemDocument:
         return PortalMarkerItemDocument.model_validate(payload)
     if item_type == ItemType.FAVORITE_PORTAL_ITEM.value:
         return FavoritePortalItemDocument.model_validate(payload)
+    if item_type == ItemType.LOCK_BOX.value:
+        return LockBoxItemDocument.model_validate(payload)
     return ItemDocument.model_validate(payload)
 
 
@@ -61,8 +65,7 @@ class FileStorage:
 
     def get_default_dimension_root_id(self) -> str:
         return str(self.get_meta()["default_dimension_root_id"])
-
-    def get_item(self, item_id: str) -> ItemDocument | None:
+    def get_item(self, item_id: str) -> ItemPayload | None:
         payload = self._read_json(config.ITEMS_DIR / f"{item_id}.json")
         if payload is None:
             return None
@@ -145,3 +148,8 @@ class FileStorage:
             if item.dimension_root_id == root_id:
                 items.append(item)
         return items
+
+
+# NOTE: Lock box contents are encrypted and decrypted entirely client-side.
+# The server only ever stores the opaque `encrypted_contents` hex blob and
+# never receives the code or plaintext contents.

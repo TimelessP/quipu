@@ -112,6 +112,11 @@ const itemAddTextEl = document.getElementById("item-add-text");
 const itemAddUrlEl = document.getElementById("item-add-url");
 const itemAddPhotoEl = document.getElementById("item-add-photo");
 const itemAddSubmitButtonEl = document.getElementById("item-add-submit");
+const itemAddBoxNameEl = document.getElementById("item-add-box-name");
+const itemAddBoxDescriptionEl = document.getElementById("item-add-box-description");
+const itemAddBoxImageEl = document.getElementById("item-add-box-image");
+const itemAddBoxUrlEl = document.getElementById("item-add-box-url");
+const itemAddBoxCodeEl = document.getElementById("item-add-box-code");
 const settingsModalEl = document.getElementById("settings-modal");
 const aboutModalEl = document.getElementById("about-modal");
 const imageViewerModalEl = document.getElementById("image-viewer-modal");
@@ -269,7 +274,7 @@ function getUiStackFromHistory(state = history.state) {
   if (!state || state.uiSessionId !== uiSessionId || !Array.isArray(state.uiStack)) {
     return [];
   }
-  return state.uiStack.filter((layer) => layer === "menu" || layer === "items" || layer === "portals" || layer === "debug" || layer === "settings" || layer === "about" || layer === "item-add" || layer === "image-viewer");
+  return state.uiStack.filter((layer) => layer === "menu" || layer === "items" || layer === "portals" || layer === "debug" || layer === "settings" || layer === "about" || layer === "item-add" || layer === "image-viewer" || layer === "lockbox");
 }
 
 function getLayerElement(layerId) {
@@ -282,6 +287,7 @@ function getLayerElement(layerId) {
     case "about": return aboutModalEl;
     case "item-add": return itemAddModalEl;
     case "image-viewer": return imageViewerModalEl;
+    case "lockbox": return lockboxModalEl;
     default: return null;
   }
 }
@@ -290,9 +296,16 @@ function getTopUiLayer() {
   return uiStack.length ? uiStack[uiStack.length - 1] : null;
 }
 
+function blurFocusWithin(el) {
+  if (el && document.activeElement instanceof HTMLElement && el.contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
+}
+
 function setLayerVisible(layerId, visible) {
   if (layerId === "menu") {
     if (!devMenuEl || !menuToggleButtonEl) return;
+    if (!visible) blurFocusWithin(devMenuEl);
     devMenuEl.classList.toggle("is-collapsed", !visible);
     appShellEl?.classList.toggle("menu-open", visible);
     menuScrimEl?.setAttribute("aria-hidden", visible ? "false" : "true");
@@ -303,6 +316,7 @@ function setLayerVisible(layerId, visible) {
 
   const modalEl = getLayerElement(layerId);
   if (!modalEl) return;
+  if (!visible) blurFocusWithin(modalEl);
   modalEl.classList.toggle("is-open", visible);
   modalEl.setAttribute("aria-hidden", visible ? "false" : "true");
 }
@@ -312,11 +326,11 @@ function syncUiStack(nextStack) {
   uiStack = [...nextStack];
 
   setLayerVisible("menu", uiStack.includes("menu"));
-  for (const layerId of ["items", "portals", "debug", "settings", "about", "item-add", "image-viewer"]) {
+  for (const layerId of ["items", "portals", "debug", "settings", "about", "item-add", "image-viewer", "lockbox"]) {
     setLayerVisible(layerId, uiStack.includes(layerId));
   }
 
-  const hasModalLayer = ["items", "portals", "debug", "settings", "about", "item-add", "image-viewer"].some((layerId) => uiStack.includes(layerId));
+  const hasModalLayer = ["items", "portals", "debug", "settings", "about", "item-add", "image-viewer", "lockbox"].some((layerId) => uiStack.includes(layerId));
   modalScrimEl?.classList.toggle("is-open", hasModalLayer);
   modalScrimEl?.setAttribute("aria-hidden", hasModalLayer ? "false" : "true");
 
@@ -884,11 +898,12 @@ function setPlayerActionsOpen(open) {
 }
 
 function getActiveModalEls() {
-  return [itemsModalEl, portalsModalEl, debugModalEl, itemAddModalEl, imageViewerModalEl].filter(Boolean);
+  return [itemsModalEl, portalsModalEl, debugModalEl, itemAddModalEl, imageViewerModalEl, document.getElementById("lockbox-modal")].filter(Boolean);
 }
 
 function closeAllModals() {
   for (const modal of getActiveModalEls()) {
+    blurFocusWithin(modal);
     modal.classList.remove("is-open");
     modal.setAttribute("aria-hidden", "true");
   }
@@ -905,6 +920,7 @@ function openModal(modalEl) {
   else if (modalEl === aboutModalEl) openUiLayer("about");
   else if (modalEl === itemAddModalEl) openUiLayer("item-add");
   else if (modalEl === imageViewerModalEl) openUiLayer("image-viewer");
+  else if (modalEl === document.getElementById("lockbox-modal")) openUiLayer("lockbox");
 }
 
 function closeModal(modalEl) {
@@ -926,7 +942,377 @@ function closeModal(modalEl) {
     closeUiLayer("item-add");
   }
   else if (modalEl === imageViewerModalEl) closeUiLayer("image-viewer");
+  else if (modalEl === document.getElementById("lockbox-modal")) closeUiLayer("lockbox");
 }
+
+// ── Lock Box ──────────────────────────────────────────────────────────────────
+// Contents are encrypted and decrypted entirely client-side. The server only
+// ever stores the opaque `encrypted_contents` hex blob; it never receives the
+// numeric code or the decrypted item objects.
+const lockboxModalEl = document.getElementById("lockbox-modal");
+const lockboxTitleEl = document.getElementById("lockbox-modal-title");
+const lockboxLockedViewEl = document.getElementById("lockbox-locked-view");
+const lockboxLockedMessageEl = document.getElementById("lockbox-locked-message");
+const lockboxCodeInputEl = document.getElementById("lockbox-code-input");
+const lockboxUnlockButton = document.getElementById("lockbox-unlock-button");
+const lockboxLockedCancelButton = document.getElementById("lockbox-locked-cancel");
+const lockboxUnlockedViewEl = document.getElementById("lockbox-unlocked-view");
+const lockboxUnlockedSummaryEl = document.getElementById("lockbox-unlocked-summary");
+const lockboxContentsHeadingEl = document.getElementById("lockbox-contents-heading");
+const lockboxContentsListEl = document.getElementById("lockbox-contents-list");
+const lockboxInventoryListEl = document.getElementById("lockbox-inventory-list");
+const lockboxSaveButton = document.getElementById("lockbox-save");
+const lockboxCancelButton = document.getElementById("lockbox-cancel");
+const lockboxCloseButton = document.getElementById("lockbox-modal-close");
+
+const LOCKBOX_MAGIC = "QUIPU_LOCKBOX_V1";
+
+// Active unlock session. `source` is "world" (placed on the map, persisted via
+// the API) or "inventory" (carried by the player, persisted in localStorage).
+let lockboxSession = null;
+
+// --- client-side symmetric cipher (SHA-256 keystream XOR; deliberately weak) ---
+// The keystream is SHA-256(code:counter) blocks concatenated, so the effective
+// key is longer than the payload. This only deters casual snooping by design.
+async function sha256Bytes(text) {
+  const data = new TextEncoder().encode(String(text));
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return new Uint8Array(hash);
+}
+
+async function deriveLockboxKeystream(code, length) {
+  const out = new Uint8Array(length);
+  let offset = 0;
+  let counter = 0;
+  while (offset < length) {
+    const block = await sha256Bytes(`${code}:${counter}`);
+    const take = Math.min(block.length, length - offset);
+    out.set(block.subarray(0, take), offset);
+    offset += take;
+    counter += 1;
+  }
+  return out;
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function hexToBytes(hex) {
+  if (typeof hex !== "string" || hex.length === 0 || hex.length % 2 !== 0) return new Uint8Array();
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return out;
+}
+
+function isLockboxCodeValid(code) {
+  return typeof code === "string" && /^\d+$/.test(code);
+}
+
+async function encryptLockboxContents(items, code) {
+  const envelope = JSON.stringify({ magic: LOCKBOX_MAGIC, items: items || [] });
+  const plain = new TextEncoder().encode(envelope);
+  const keystream = await deriveLockboxKeystream(code, plain.length);
+  const cipher = new Uint8Array(plain.length);
+  for (let i = 0; i < plain.length; i++) cipher[i] = plain[i] ^ keystream[i];
+  return bytesToHex(cipher);
+}
+
+// Returns the decrypted item array, or null when the code is wrong / payload is
+// corrupt. An empty blob decrypts to an empty box for any code.
+async function decryptLockboxContents(hexPayload, code) {
+  if (!hexPayload) return [];
+  const cipher = hexToBytes(hexPayload);
+  const keystream = await deriveLockboxKeystream(code, cipher.length);
+  const plain = new Uint8Array(cipher.length);
+  for (let i = 0; i < cipher.length; i++) plain[i] = cipher[i] ^ keystream[i];
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(plain));
+    if (!parsed || parsed.magic !== LOCKBOX_MAGIC || !Array.isArray(parsed.items)) return null;
+    return parsed.items.map((entry) => normalizeInventoryItem(entry));
+  } catch {
+    return null;
+  }
+}
+
+// Reads the current encrypted blob for the active box. World boxes are fetched
+// from the API; inventory boxes carry the blob locally.
+async function fetchLockboxEncryptedContents(session) {
+  if (session.source === "inventory") {
+    const entry = state.inventory.find((i) => i.id === session.id);
+    return entry?.encrypted_contents || "";
+  }
+  const resp = await fetch(`/api/items/${session.id}`);
+  if (!resp.ok) throw new Error(await resp.text());
+  const json = await resp.json();
+  return json.encrypted_contents || "";
+}
+
+function openLockboxForItem(item, source = "world") {
+  if (!item || item.type !== "lock_box") return;
+  lockboxSession = {
+    id: item.id,
+    source: source === "inventory" ? "inventory" : "world",
+    title: item.box_name || "Lock Box",
+    code: null,
+    contents: [],
+    inventory: [],
+  };
+  if (lockboxTitleEl) lockboxTitleEl.textContent = lockboxSession.title;
+  showLockboxLockedView();
+  openModal(lockboxModalEl);
+  lockboxCodeInputEl?.focus();
+}
+
+function showLockboxLockedView(message) {
+  if (lockboxLockedMessageEl) {
+    lockboxLockedMessageEl.textContent = message || "Enter the numeric code to unlock this box.";
+  }
+  if (lockboxCodeInputEl) lockboxCodeInputEl.value = "";
+  if (lockboxLockedViewEl) lockboxLockedViewEl.hidden = false;
+  if (lockboxUnlockedViewEl) lockboxUnlockedViewEl.hidden = true;
+}
+
+async function attemptLockboxUnlock() {
+  if (!lockboxSession) return;
+  const code = (lockboxCodeInputEl?.value || "").trim();
+  if (!isLockboxCodeValid(code)) {
+    notify("Enter the numeric code (digits only).", "error");
+    return;
+  }
+  let hex;
+  try {
+    hex = await fetchLockboxEncryptedContents(lockboxSession);
+  } catch (err) {
+    notify(parseErrorMessage(err) || "Could not load this box.", "error");
+    return;
+  }
+  const contents = await decryptLockboxContents(hex, code);
+  if (contents === null) {
+    notify("Incorrect code.", "error");
+    return;
+  }
+  lockboxSession.code = code;
+  lockboxSession.contents = contents;
+  // Working copy of all held items (inventory + favourites), minus this box.
+  // Entries keep their `inventorySource` marker so save can route them back to
+  // the right store (favourites live separately from `state.inventory`).
+  lockboxSession.inventory = getInventoryEntries()
+    .filter((entry) => entry.id !== lockboxSession.id);
+  renderLockboxUnlocked();
+}
+
+function renderLockboxUnlocked() {
+  if (!lockboxSession) return;
+  if (lockboxLockedViewEl) lockboxLockedViewEl.hidden = true;
+  if (lockboxUnlockedViewEl) lockboxUnlockedViewEl.hidden = false;
+
+  const boxName = lockboxSession.title || "Lock Box";
+  const count = lockboxSession.contents.length;
+  if (lockboxUnlockedSummaryEl) {
+    lockboxUnlockedSummaryEl.textContent =
+      `${boxName} unlocked — ${count} ${count === 1 ? "item" : "items"} inside. ` +
+      `Move items between the box and your inventory, then Save & Lock.`;
+  }
+  if (lockboxContentsHeadingEl) {
+    lockboxContentsHeadingEl.textContent = count ? `In This Box (${count})` : "In This Box";
+  }
+
+  renderLockboxColumn(lockboxContentsListEl, lockboxSession.contents, "Take out", (entry) => {
+    lockboxSession.contents = lockboxSession.contents.filter((i) => i.id !== entry.id);
+    lockboxSession.inventory = [...lockboxSession.inventory, entry];
+    renderLockboxUnlocked();
+  }, "The box is empty.");
+
+  renderLockboxColumn(lockboxInventoryListEl, lockboxSession.inventory, "Put in box", (entry) => {
+    lockboxSession.inventory = lockboxSession.inventory.filter((i) => i.id !== entry.id);
+    lockboxSession.contents = [...lockboxSession.contents, entry];
+    renderLockboxUnlocked();
+  }, "Your inventory is empty — add or pick up items to place them here.");
+}
+
+function getLockboxEntryTitle(entry) {
+  if (entry.type === "favorite_portal_item") {
+    return entry.content_name || entry.favorite_portal_name || entry.portal_name || "Favourite Portal";
+  }
+  return getInventoryEntryTitle(entry);
+}
+
+function getLockboxEntryDetailLines(entry) {
+  const typeLabel = getDisplayItemTypeLabel(entry);
+  const lines = [];
+
+  if (entry.type === "favorite_portal_item") {
+    const lat = entry.favorite_portal_latitude;
+    const lng = entry.favorite_portal_longitude;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      lines.push(`${typeLabel} · ${formatLatLng(lat, lng)}`);
+    } else {
+      lines.push(typeLabel);
+    }
+    if (entry.content_text) lines.push(entry.content_text);
+    else if (entry.content_url) lines.push(entry.content_url);
+  } else if (entry.type === "media") {
+    const bits = [typeLabel];
+    if (entry.content_text) bits.push(entry.content_text);
+    else if (entry.content_url) bits.push(entry.content_url);
+    else if (entry.content_upload_path || entry.content_data_url) bits.push("Image attached");
+    lines.push(bits.join(" · "));
+  } else if (entry.type === "visit_counter") {
+    const count = Number.isFinite(entry.visit_count) ? entry.visit_count : 0;
+    lines.push(`${typeLabel} · ${count} visit${count === 1 ? "" : "s"}`);
+  } else {
+    lines.push(typeLabel);
+  }
+
+  return lines.filter(Boolean);
+}
+
+function getLockboxEntryThumb(entry) {
+  return entry.content_upload_path || entry.content_data_url || entry.box_image || "";
+}
+
+function renderLockboxColumn(listEl, entries, actionLabel, onAction, emptyNote) {
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.className = "lockbox-empty-note";
+    li.textContent = emptyNote;
+    listEl.appendChild(li);
+    return;
+  }
+  for (const entry of entries) {
+    const li = document.createElement("li");
+    li.className = "lockbox-entry";
+    const badge = getItemTypeBadgeInfo(entry);
+
+    const thumbSrc = getLockboxEntryThumb(entry);
+    if (thumbSrc) {
+      const thumb = document.createElement("img");
+      thumb.className = "lockbox-entry-thumb";
+      thumb.src = thumbSrc;
+      thumb.alt = "";
+      li.appendChild(thumb);
+    }
+
+    const info = document.createElement("div");
+    info.className = "lockbox-entry-info";
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "lockbox-entry-title";
+    const badgeEl = document.createElement("span");
+    badgeEl.className = `item-type-badge ${badge.modifier}`;
+    badgeEl.title = badge.label;
+    badgeEl.textContent = badge.code;
+    const nameEl = document.createElement("strong");
+    nameEl.textContent = getLockboxEntryTitle(entry);
+    titleRow.appendChild(badgeEl);
+    titleRow.appendChild(nameEl);
+    info.appendChild(titleRow);
+
+    for (const line of getLockboxEntryDetailLines(entry)) {
+      const subEl = document.createElement("div");
+      subEl.className = "lockbox-entry-sub";
+      subEl.textContent = line;
+      info.appendChild(subEl);
+    }
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "lockbox-entry-action";
+    btn.textContent = actionLabel;
+    btn.addEventListener("click", () => onAction(entry));
+
+    li.appendChild(info);
+    li.appendChild(btn);
+    listEl.appendChild(li);
+  }
+}
+
+// Routes the working inventory back to the right stores: favourites persist to
+// the favourites store, everything else to `state.inventory`. Items that were
+// moved into the box are absent from the working set and so drop out of both.
+function commitLockboxWorkingInventory(extraInventoryItems = []) {
+  const held = lockboxSession.inventory;
+  const heldFavoritePortalIds = new Set(
+    held.filter((e) => e.inventorySource === "favorite" && e.portalId).map((e) => e.portalId)
+  );
+  const nextFavorites = loadPortalFavorites().filter((f) => heldFavoritePortalIds.has(f.id));
+  savePortalFavorites(nextFavorites);
+
+  const heldRegular = held
+    .filter((e) => e.inventorySource !== "favorite")
+    .map((e) => normalizeInventoryItem(e));
+  state.inventory = [...extraInventoryItems, ...heldRegular];
+}
+
+async function saveLockboxSession() {
+  if (!lockboxSession || !lockboxSession.code) return;
+  let hex;
+  try {
+    hex = await encryptLockboxContents(lockboxSession.contents, lockboxSession.code);
+  } catch {
+    notify("Could not encrypt box contents.", "error");
+    return;
+  }
+
+  if (lockboxSession.source === "world") {
+    try {
+      const form = new URLSearchParams();
+      form.append("actor", state.ownerId);
+      form.append("encrypted_contents", hex);
+      const resp = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${lockboxSession.id}/set-contents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form,
+      });
+      if (!resp.ok) {
+        notify(`Could not save box contents: ${await resp.text()}`, "error");
+        return;
+      }
+    } catch {
+      notify("Network error saving lock box.", "error");
+      return;
+    }
+    // Box stays in the world; commit the working inventory the player carries.
+    commitLockboxWorkingInventory();
+  } else {
+    // Inventory box: update its blob in place and commit the working inventory.
+    const boxEntry = state.inventory.find((i) => i.id === lockboxSession.id);
+    const updatedBox = normalizeInventoryItem({
+      ...(boxEntry || {}),
+      id: lockboxSession.id,
+      type: "lock_box",
+      encrypted_contents: hex,
+    });
+    commitLockboxWorkingInventory([updatedBox]);
+  }
+
+  saveInventory();
+  renderInventory();
+  notify("Lock box locked.", "success", 2000);
+  closeLockboxModal();
+}
+
+function closeLockboxModal() {
+  lockboxSession = null;
+  showLockboxLockedView();
+  closeModal(lockboxModalEl);
+}
+
+lockboxUnlockButton?.addEventListener("click", () => { void attemptLockboxUnlock(); });
+lockboxCodeInputEl?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void attemptLockboxUnlock();
+  }
+});
+lockboxSaveButton?.addEventListener("click", () => { void saveLockboxSession(); });
+lockboxCancelButton?.addEventListener("click", () => closeLockboxModal());
+lockboxLockedCancelButton?.addEventListener("click", () => closeLockboxModal());
+lockboxCloseButton?.addEventListener("click", () => closeLockboxModal());
+
 
 function clampImageViewerScale(nextScale) {
   return Math.min(imageViewerMaxScale, Math.max(imageViewerMinScale, nextScale));
@@ -1129,6 +1515,11 @@ function normalizeInventoryItem(item) {
     favorite_portal_name: normalizeOptionalText(item?.favorite_portal_name),
     visit_counter_name: normalizeOptionalText(item?.visit_counter_name),
     visit_count: Number.isFinite(item?.visit_count) ? Math.max(0, Math.floor(Number(item.visit_count))) : 0,
+    box_name: normalizeOptionalText(item?.box_name),
+    box_description: normalizeOptionalText(item?.box_description),
+    box_image: normalizeOptionalUrl(item?.box_image),
+    box_url: normalizeOptionalUrl(item?.box_url),
+    encrypted_contents: typeof item?.encrypted_contents === "string" && item.encrypted_contents ? item.encrypted_contents : null,
   };
 }
 
@@ -1217,6 +1608,12 @@ function resetItemAddForm({ keepType = false } = {}) {
   if (itemAddTextEl) itemAddTextEl.value = "";
   if (itemAddUrlEl) itemAddUrlEl.value = "";
   if (itemAddPhotoEl) itemAddPhotoEl.value = "";
+  if (itemAddBoxNameEl) itemAddBoxNameEl.value = "";
+  if (itemAddBoxDescriptionEl) itemAddBoxDescriptionEl.value = "";
+  if (itemAddBoxImageEl) itemAddBoxImageEl.value = "";
+  if (itemAddBoxUrlEl) itemAddBoxUrlEl.value = "";
+  if (itemAddBoxCodeEl) itemAddBoxCodeEl.value = "";
+  setLockboxCodeFieldHidden(false);
   syncItemAddFieldsForType();
 }
 
@@ -1249,6 +1646,10 @@ function openItemEditModal(entry, source = "inventory") {
     notify("This item type is not editable.", "error", 2200);
     return;
   }
+  if (entry.type === "lock_box") {
+    openLockboxMetadataEditor(entry, source === "location" ? "location" : "inventory");
+    return;
+  }
 
   if (itemAddTypeEl) {
     itemAddTypeEl.value = "media";
@@ -1265,6 +1666,100 @@ function openItemEditModal(entry, source = "inventory") {
   itemAddTextEl?.focus();
 }
 
+// Opens the shared item-add form in edit mode for a lock box's metadata
+// (name/description/image/url). The numeric code and encrypted contents are
+// never touched here — changing the code requires the unlock flow.
+function openLockboxMetadataEditor(entry, source = "inventory") {
+  if (itemAddTypeEl) itemAddTypeEl.value = "lock_box";
+  resetItemAddForm({ keepType: true });
+
+  if (itemAddBoxNameEl) itemAddBoxNameEl.value = entry.box_name || "";
+  if (itemAddBoxDescriptionEl) itemAddBoxDescriptionEl.value = entry.box_description || "";
+  if (itemAddBoxImageEl) itemAddBoxImageEl.value = entry.box_image || "";
+  if (itemAddBoxUrlEl) itemAddBoxUrlEl.value = entry.box_url || "";
+
+  setItemFormMode("edit", entry, source);
+  setLockboxCodeFieldHidden(true);
+  openModal(itemAddModalEl);
+  itemAddBoxNameEl?.focus();
+}
+
+function setLockboxCodeFieldHidden(hidden) {
+  const codeLabel = itemAddBoxCodeEl?.closest("label");
+  if (codeLabel) codeLabel.hidden = hidden;
+}
+
+// Saves edited lock box metadata. Inventory boxes are updated locally; world
+// boxes are patched through the dedicated /lockbox endpoint (presence-gated by
+// the server). The numeric code and encrypted contents are never modified here.
+async function submitLockboxMetadataEdit(target) {
+  const boxName = (itemAddBoxNameEl?.value || "").trim();
+  const boxDescription = (itemAddBoxDescriptionEl?.value || "").trim();
+  const boxImage = (itemAddBoxImageEl?.value || "").trim();
+  const boxUrl = (itemAddBoxUrlEl?.value || "").trim();
+
+  if (boxImage && !sanitizeExternalHttpUrl(boxImage)) {
+    notify("Image URL must be a valid http(s) URL.", "error", 2600);
+    return;
+  }
+  if (boxUrl && !sanitizeExternalHttpUrl(boxUrl)) {
+    notify("Box URL must be a valid http(s) URL.", "error", 2600);
+    return;
+  }
+
+  if (itemEditSource === "location") {
+    if (!state.physicalPosition) {
+      notify("GPS position needed to edit a world lock box.", "error", 2600);
+      return;
+    }
+    const form = new FormData();
+    form.append("actor_latitude", String(state.physicalPosition.lat));
+    form.append("actor_longitude", String(state.physicalPosition.lng));
+    if (boxName) form.append("box_name", boxName);
+    form.append("box_description", boxDescription);
+    if (boxImage) {
+      form.append("box_image", boxImage);
+    } else {
+      form.append("box_image_clear", "true");
+    }
+    if (boxUrl) {
+      form.append("box_url", boxUrl);
+    } else {
+      form.append("box_url_clear", "true");
+    }
+
+    try {
+      const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/lockbox`, {
+        method: "PATCH",
+        body: form,
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+    } catch (err) {
+      notify(parseErrorMessage(err) || "Could not update lock box.", "error", 3200);
+      return;
+    }
+
+    const virtual = getVirtualPosition();
+    if (virtual) {
+      await loadNearby(virtual.lat, virtual.lng, false);
+    }
+  } else {
+    updateInventoryItem(target.id, {
+      box_name: normalizeOptionalText(boxName),
+      box_description: normalizeOptionalText(boxDescription),
+      box_image: normalizeOptionalUrl(boxImage),
+      box_url: normalizeOptionalUrl(boxUrl),
+    });
+    renderInventory();
+  }
+
+  notify("Lock box updated.", "success", 2000);
+  closeModal(itemAddModalEl);
+}
+
+
 function openInventoryEditorForEntry(entryId) {
   if (!entryId) return;
   const target = getInventoryEntries().find((entry) => entry.id === entryId);
@@ -1277,7 +1772,7 @@ function openInventoryEditorForEntry(entryId) {
 
 function openLocationEditorForItem(item) {
   if (!item || !item.id) return;
-  if (item.type !== "media" && item.type !== "favorite_portal_item") {
+  if (item.type !== "media" && item.type !== "favorite_portal_item" && item.type !== "lock_box") {
     notify("Only media/favourite items can be edited in place.", "error", 2400);
     return;
   }
@@ -1289,6 +1784,7 @@ function getDisplayItemTypeLabel(item) {
   if (item.type === "portal_marker") return "Portal";
   if (item.type === "visit_counter") return "Visit Counter";
   if (item.type === "media") return "Media";
+  if (item.type === "lock_box") return "Lock Box";
   return item.type;
 }
 
@@ -1305,6 +1801,9 @@ function getItemTypeBadgeInfo(item) {
   if (item?.type === "media") {
     return { code: "MED", label: "Media", modifier: "item-type-badge--media" };
   }
+  if (item?.type === "lock_box") {
+    return { code: "BOX", label: "Lock Box", modifier: "item-type-badge--lockbox" };
+  }
   return { code: "MED", label: "Media", modifier: "item-type-badge--media" };
 }
 
@@ -1317,6 +1816,9 @@ function getInventoryEntryTitle(item) {
   }
   if (item.type === "media") {
     return item.content_name || "Media";
+  }
+  if (item.type === "lock_box") {
+    return item.box_name || "Lock Box";
   }
   return getDisplayItemTypeLabel(item);
 }
@@ -1367,6 +1869,21 @@ const ITEM_CARD_RENDERERS = {
   portal_marker: {
     title: () => "Portal",
     locationBodyHtml: () => "",
+    inventoryDetailHtml: (item) => `<small>Picked up ${new Date(item.placement_timestamp).toLocaleString()}</small>`,
+  },
+  lock_box: {
+    title: (item) => item.box_name || "Lock Box",
+    locationBodyHtml: (item) => {
+      const parts = [];
+      if (item.box_description) parts.push(`<div class="item-content-text">${escapeHtml(item.box_description)}</div>`);
+      if (item.box_image) parts.push(`<img class="item-photo" src="${escapeHtml(item.box_image)}" alt="box image" />`);
+      const safeBoxUrl = sanitizeExternalHttpUrl(item.box_url);
+      if (safeBoxUrl) {
+        parts.push(`<div class="item-content-url"><a href="${escapeHtml(safeBoxUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(safeBoxUrl)}</a></div>`);
+      }
+      parts.push(`<div><button class="unlock-box-button">Unlock</button></div>`);
+      return parts.join("");
+    },
     inventoryDetailHtml: (item) => `<small>Picked up ${new Date(item.placement_timestamp).toLocaleString()}</small>`,
   },
   default: {
@@ -1541,6 +2058,33 @@ const ITEM_FLOW_BEHAVIORS = {
   portal_marker: {
     placeAtLocation: async () => "Cannot re-place this item type.",
   },
+  lock_box: {
+    // The numeric code and encrypted contents are attached by the add-submit
+    // handler, which reads the dedicated lock box fields. Boxes start empty.
+    buildAddDraftItem: async () => ({
+      type: "lock_box",
+      box_name: null,
+      box_description: null,
+      box_image: null,
+      box_url: null,
+      encrypted_contents: null,
+    }),
+    placeAtLocation: async ({ state, virtual, item, getPlacementAccuracyMeters }) => {
+      await sendJson(`/api/dimensions/${state.dimensionRootId}/items`, {
+        type: "lock_box",
+        owner: state.ownerId,
+        latitude: virtual.lat,
+        longitude: virtual.lng,
+        accuracy_meters: getPlacementAccuracyMeters(),
+        box_name: item.box_name || null,
+        box_description: item.box_description || null,
+        box_image: item.box_image || null,
+        box_url: item.box_url || null,
+        encrypted_contents: item.encrypted_contents || null,
+      });
+      return null;
+    },
+  },
   default: {
     buildAddDraftItem: async () => null,
     placeAtLocation: async () => null,
@@ -1594,17 +2138,29 @@ function getMapCenterOrPhysical() {
 }
 
 function getAddItemType() {
-  return itemAddTypeEl?.value === "visit_counter" ? "visit_counter" : "media";
+  const v = itemAddTypeEl?.value;
+  if (v === "visit_counter") return "visit_counter";
+  if (v === "lock_box") return "lock_box";
+  return "media";
 }
 
 function syncItemAddFieldsForType() {
-  const isVisitCounter = getAddItemType() === "visit_counter";
-  if (itemAddMediaFieldsEl) itemAddMediaFieldsEl.hidden = isVisitCounter;
+  const t = getAddItemType();
+  const isVisitCounter = t === "visit_counter";
+  const isLockBox = t === "lock_box";
+  if (itemAddMediaFieldsEl) itemAddMediaFieldsEl.hidden = isVisitCounter || isLockBox;
   if (itemAddNameEl) itemAddNameEl.required = false;
   if (itemAddNameEl && isVisitCounter) itemAddNameEl.value = "";
-  if (itemAddTextEl) itemAddTextEl.value = isVisitCounter ? "" : itemAddTextEl.value;
-  if (itemAddUrlEl) itemAddUrlEl.value = isVisitCounter ? "" : itemAddUrlEl.value;
-  if (itemAddPhotoEl) itemAddPhotoEl.value = isVisitCounter ? "" : itemAddPhotoEl.value;
+  if (itemAddNameEl && isLockBox) itemAddNameEl.value = "";
+  if (itemAddTextEl) itemAddTextEl.value = isVisitCounter || isLockBox ? "" : itemAddTextEl.value;
+  if (itemAddUrlEl) itemAddUrlEl.value = isVisitCounter || isLockBox ? "" : itemAddUrlEl.value;
+  if (itemAddPhotoEl) itemAddPhotoEl.value = isVisitCounter || isLockBox ? "" : itemAddPhotoEl.value;
+
+  // Show lock box specific fields if lock box selected
+  const lockBoxFields = document.querySelectorAll(".item-add-lockbox-field");
+  for (const el of lockBoxFields) {
+    el.hidden = !isLockBox;
+  }
 }
 
 itemAddTypeEl?.addEventListener("change", syncItemAddFieldsForType);
@@ -2122,6 +2678,7 @@ function getMapThemeColors() {
     favorite: getCssVar("--map-favorite", getCssVar("--accent", "#0073ff")),
     media: getCssVar("--map-media", "#f38b2a"),
     visitCounter: getCssVar("--map-visit-counter", "#0e7a56"),
+    lockbox: getCssVar("--map-lockbox", "#b5651d"),
     portalLine: getCssVar("--portal-line", "#341a8d"),
   };
 }
@@ -2420,6 +2977,40 @@ function initMap() {
   });
 }
 
+function createItemMarker(item, theme) {
+  if (item.type === "lock_box") {
+    const icon = L.divIcon({
+      className: "lockbox-map-icon",
+      html:
+        '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">' +
+        '<rect x="3" y="9.5" width="18" height="11" rx="1.6"></rect>' +
+        '<path d="M7.5 9.5V7a4.5 4.5 0 0 1 9 0v2.5" fill="none" stroke-width="2"></path>' +
+        '<circle cx="12" cy="14.5" r="1.6" class="lockbox-map-icon__keyhole"></circle>' +
+        '</svg>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 15],
+    });
+    return L.marker([item.latitude, item.longitude], { icon });
+  }
+
+  const color =
+    item.type === "portal_marker"
+      ? theme.portal
+      : item.type === "favorite_portal_item"
+        ? theme.favorite
+        : item.type === "visit_counter"
+          ? theme.visitCounter
+          : theme.media;
+
+  return L.circleMarker([item.latitude, item.longitude], {
+    radius: item.type === "portal_marker" ? 12 : item.type === "favorite_portal_item" ? 10 : item.type === "visit_counter" ? 9 : 8,
+    color,
+    fillColor: color,
+    fillOpacity: item.type === "portal_marker" ? 0.95 : item.type === "favorite_portal_item" ? 0.82 : item.type === "visit_counter" ? 0.88 : 0.9,
+    weight: item.type === "portal_marker" ? 3 : item.type === "favorite_portal_item" ? 2.5 : item.type === "visit_counter" ? 2.25 : 2,
+  });
+}
+
 function drawItems(items) {
   const theme = getMapThemeColors();
   for (const marker of state.itemMarkers.values()) {
@@ -2428,25 +3019,12 @@ function drawItems(items) {
   state.itemMarkers.clear();
 
   items.forEach((item) => {
-    const color =
-      item.type === "portal_marker"
-        ? theme.portal
-        : item.type === "favorite_portal_item"
-          ? theme.favorite
-          : item.type === "visit_counter"
-            ? theme.visitCounter
-            : theme.media;
-
-    const marker = L.circleMarker([item.latitude, item.longitude], {
-      radius: item.type === "portal_marker" ? 12 : item.type === "favorite_portal_item" ? 10 : item.type === "visit_counter" ? 9 : 8,
-      color,
-      fillColor: color,
-      fillOpacity: item.type === "portal_marker" ? 0.95 : item.type === "favorite_portal_item" ? 0.82 : item.type === "visit_counter" ? 0.88 : 0.9,
-      weight: item.type === "portal_marker" ? 3 : item.type === "favorite_portal_item" ? 2.5 : item.type === "visit_counter" ? 2.25 : 2,
-    }).addTo(state.map);
+    const marker = createItemMarker(item, theme).addTo(state.map);
 
     if (item.type === "portal_marker") {
       marker.bindTooltip(formatPortalLabel(item), { direction: "top", opacity: 0.9 });
+    } else if (item.type === "lock_box") {
+      marker.bindTooltip(item.box_name || "Lock Box", { direction: "top", opacity: 0.9 });
     }
 
     marker.on("click", () => onItemClicked(item));
@@ -2731,6 +3309,10 @@ function mergeDisplayItems(nearbyItems, viewportPortalItems, linkedPortalItems =
 }
 
 function onItemClicked(item) {
+  if (item.type === "lock_box") {
+    openLockboxForItem(item, "world");
+    return;
+  }
   if (item.type !== "portal_marker") return;
 
   if (!state.physicalPosition) {
@@ -3471,6 +4053,11 @@ function renderItemList(items) {
       <small class="item-meta">${new Date(item.placement_timestamp).toLocaleString()}</small>
       ${bodyHtml}
     `;
+
+    const unlockBtn = li.querySelector(".unlock-box-button");
+    if (unlockBtn) {
+      unlockBtn.addEventListener("click", () => openLockboxForItem(item));
+    }
 
     const photoEl = li.querySelector(".item-photo");
     if (photoEl) {
@@ -4981,7 +5568,10 @@ function renderInventory() {
     const actions = document.createElement("div");
     actions.className = "inventory-actions";
 
-    if (item.type !== "visit_counter") {
+    if (item.type === "lock_box") {
+      appendItemActionButton(actions, "🔓 Unlock", () => openLockboxForItem(item, "inventory"));
+      appendItemActionButton(actions, "✎ Edit", () => openInventoryEditorForEntry(item.id));
+    } else if (item.type !== "visit_counter") {
       appendItemActionButton(actions, "✎ Edit", () => openInventoryEditorForEntry(item.id));
     }
 
@@ -5011,6 +5601,11 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
       : null;
     if (!target) {
       notify("Item not available for editing.", "error", 2200);
+      return;
+    }
+
+    if (target.type === "lock_box") {
+      await submitLockboxMetadataEdit(target);
       return;
     }
 
@@ -5100,6 +5695,10 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
   const text = (itemAddTextEl?.value || "").trim();
   const url = (itemAddUrlEl?.value || "").trim();
   const photoFile = itemAddPhotoEl?.files?.[0] || null;
+  const boxName = (itemAddBoxNameEl?.value || "").trim();
+  const boxDescription = (itemAddBoxDescriptionEl?.value || "").trim();
+  const boxImage = (itemAddBoxImageEl?.value || "").trim();
+  const boxUrl = (itemAddBoxUrlEl?.value || "").trim();
 
   const validationError = behavior.validateAdd?.({ name, text, url, photoFile });
   if (validationError) {
@@ -5108,13 +5707,47 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
   }
 
   const draftItem = await behavior.buildAddDraftItem?.({ name, text, url, photoFile });
+  // If lock_box, populate dedicated box fields and produce the initial empty
+  // encrypted payload client-side. Lock boxes always require a numeric code.
+  if (itemType === "lock_box") {
+    const codeValue = (itemAddBoxCodeEl?.value || "").trim();
+    if (!isLockboxCodeValid(codeValue)) {
+      notify("Lock boxes need a numeric code (digits only).", "error");
+      return;
+    }
+    draftItem.box_name = boxName || null;
+    draftItem.box_description = boxDescription || null;
+    draftItem.box_image = boxImage || null;
+    draftItem.box_url = boxUrl || null;
+    try {
+      draftItem.encrypted_contents = await encryptLockboxContents([], codeValue);
+    } catch (e) {
+      notify("Failed to prepare encrypted box contents.", "error");
+      return;
+    }
+  }
   if (!draftItem) {
     notify("Could not add item.", "error");
     return;
   }
 
   if (itemAddTarget === "inventory") {
-    const newItem = await behavior.buildInventoryItem?.({ state, name, text, url, photoFile });
+    let newItem;
+    if (itemType === "lock_box") {
+      newItem = normalizeInventoryItem({
+        id: crypto.randomUUID(),
+        type: "lock_box",
+        owner: state.ownerId,
+        placement_timestamp: new Date().toISOString(),
+        box_name: draftItem.box_name,
+        box_description: draftItem.box_description,
+        box_image: draftItem.box_image,
+        box_url: draftItem.box_url,
+        encrypted_contents: draftItem.encrypted_contents || null,
+      });
+    } else {
+      newItem = await behavior.buildInventoryItem?.({ state, name, text, url, photoFile });
+    }
     if (!newItem) {
       notify("Could not add inventory item.", "error");
       return;
@@ -5160,7 +5793,23 @@ async function boot() {
   setNetworkStatus();
   initLocCInputs();
   refreshGpsSpooferStatus();
+  // Ensure CSS `--vh` is measured/applied before creating the Leaflet map so
+  // initial container sizing (used by Leaflet) matches the real viewport.
+  try {
+    updateVhCssVar();
+  } catch (e) {
+    // swallow any errors measuring the viewport
+  }
   initMap();
+  // Leaflet sometimes measures container size too early; invalidate after
+  // initialization on the next frame so tiles/panes recompute correctly.
+  requestAnimationFrame(() => {
+    try {
+      state.map?.invalidateSize();
+    } catch (e) {
+      // ignore
+    }
+  });
   await beginDeviceOrientation();
   applyMapRotation();
   history.replaceState({ uiSessionId, uiStack: [] }, "", window.location.href);
