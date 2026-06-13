@@ -750,7 +750,7 @@ def update_lock_box_metadata(
     actor_longitude: float = Form(...),
     box_name: str | None = Form(default=None),
     box_description: str | None = Form(default=None),
-    box_image: HttpUrl | None = Form(default=None),
+    box_image: str | None = Form(default=None),
     box_image_clear: str | None = Form(default=None),
     box_url: HttpUrl | None = Form(default=None),
     box_url_clear: str | None = Form(default=None),

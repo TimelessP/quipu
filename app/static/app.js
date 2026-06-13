@@ -115,6 +115,11 @@ const itemAddSubmitButtonEl = document.getElementById("item-add-submit");
 const itemAddBoxNameEl = document.getElementById("item-add-box-name");
 const itemAddBoxDescriptionEl = document.getElementById("item-add-box-description");
 const itemAddBoxImageEl = document.getElementById("item-add-box-image");
+const itemAddBoxImageUrlLabelEl = document.getElementById("item-add-box-image-url-label");
+const itemAddBoxImageFileFieldEl = document.getElementById("item-add-box-image-file-field");
+const itemAddBoxImageFileEl = document.getElementById("item-add-box-image-file");
+const itemAddBoxImageRemoveEl = document.getElementById("item-add-box-image-remove");
+const itemAddBoxImagePreviewEl = document.getElementById("item-add-box-image-preview");
 const itemAddBoxUrlEl = document.getElementById("item-add-box-url");
 const itemAddBoxCodeEl = document.getElementById("item-add-box-code");
 const settingsModalEl = document.getElementById("settings-modal");
@@ -191,6 +196,8 @@ let portalEditorTargetId = null;
 let portalEditorBaseline = null;
 let portalEditorImageClearRequested = false;
 let portalEditorHasPendingChanges = false;
+let lockboxEditImageClearRequested = false;
+let lockboxEditCurrentImage = null;
 let portalEditorOpen = false;
 let portalEditorMode = "closed";
 let menuShareQrCode = null;
@@ -1611,6 +1618,10 @@ function resetItemAddForm({ keepType = false } = {}) {
   if (itemAddBoxNameEl) itemAddBoxNameEl.value = "";
   if (itemAddBoxDescriptionEl) itemAddBoxDescriptionEl.value = "";
   if (itemAddBoxImageEl) itemAddBoxImageEl.value = "";
+  if (itemAddBoxImageFileEl) itemAddBoxImageFileEl.value = "";
+  lockboxEditImageClearRequested = false;
+  lockboxEditCurrentImage = null;
+  setBoxImageEditControls(false);
   if (itemAddBoxUrlEl) itemAddBoxUrlEl.value = "";
   if (itemAddBoxCodeEl) itemAddBoxCodeEl.value = "";
   setLockboxCodeFieldHidden(false);
@@ -1675,8 +1686,13 @@ function openLockboxMetadataEditor(entry, source = "inventory") {
 
   if (itemAddBoxNameEl) itemAddBoxNameEl.value = entry.box_name || "";
   if (itemAddBoxDescriptionEl) itemAddBoxDescriptionEl.value = entry.box_description || "";
-  if (itemAddBoxImageEl) itemAddBoxImageEl.value = entry.box_image || "";
   if (itemAddBoxUrlEl) itemAddBoxUrlEl.value = entry.box_url || "";
+
+  lockboxEditImageClearRequested = false;
+  lockboxEditCurrentImage = entry.box_image || null;
+  if (itemAddBoxImageFileEl) itemAddBoxImageFileEl.value = "";
+  setBoxImageEditControls(true);
+  updateBoxImagePreview();
 
   setItemFormMode("edit", entry, source);
   setLockboxCodeFieldHidden(true);
@@ -1689,22 +1705,76 @@ function setLockboxCodeFieldHidden(hidden) {
   if (codeLabel) codeLabel.hidden = hidden;
 }
 
+// Add mode uses a plain Image URL input; edit mode swaps to a file selector
+// plus a remove-image control (box images are stored as data URLs).
+function setBoxImageEditControls(isEdit) {
+  if (itemAddBoxImageUrlLabelEl) itemAddBoxImageUrlLabelEl.hidden = isEdit;
+  if (itemAddBoxImageFileFieldEl) itemAddBoxImageFileFieldEl.hidden = !isEdit;
+}
+
+function updateBoxImagePreview() {
+  if (!itemAddBoxImagePreviewEl) return;
+  const file = itemAddBoxImageFileEl?.files?.[0] || null;
+  let src = "";
+  if (file) {
+    src = URL.createObjectURL(file);
+  } else if (lockboxEditCurrentImage && !lockboxEditImageClearRequested) {
+    src = lockboxEditCurrentImage;
+  }
+  if (src) {
+    itemAddBoxImagePreviewEl.src = src;
+    itemAddBoxImagePreviewEl.hidden = false;
+  } else {
+    itemAddBoxImagePreviewEl.removeAttribute("src");
+    itemAddBoxImagePreviewEl.hidden = true;
+  }
+  if (itemAddBoxImageRemoveEl) {
+    const hasImage = Boolean(file) || (Boolean(lockboxEditCurrentImage) && !lockboxEditImageClearRequested);
+    itemAddBoxImageRemoveEl.disabled = !hasImage;
+  }
+}
+
+itemAddBoxImageFileEl?.addEventListener("change", () => {
+  if (itemAddBoxImageFileEl.files?.length) {
+    lockboxEditImageClearRequested = false;
+  }
+  updateBoxImagePreview();
+});
+
+itemAddBoxImageRemoveEl?.addEventListener("click", () => {
+  lockboxEditImageClearRequested = true;
+  if (itemAddBoxImageFileEl) itemAddBoxImageFileEl.value = "";
+  updateBoxImagePreview();
+});
+
 // Saves edited lock box metadata. Inventory boxes are updated locally; world
 // boxes are patched through the dedicated /lockbox endpoint (presence-gated by
 // the server). The numeric code and encrypted contents are never modified here.
 async function submitLockboxMetadataEdit(target) {
   const boxName = (itemAddBoxNameEl?.value || "").trim();
   const boxDescription = (itemAddBoxDescriptionEl?.value || "").trim();
-  const boxImage = (itemAddBoxImageEl?.value || "").trim();
   const boxUrl = (itemAddBoxUrlEl?.value || "").trim();
 
-  if (boxImage && !sanitizeExternalHttpUrl(boxImage)) {
-    notify("Image URL must be a valid http(s) URL.", "error", 2600);
-    return;
-  }
   if (boxUrl && !sanitizeExternalHttpUrl(boxUrl)) {
     notify("Box URL must be a valid http(s) URL.", "error", 2600);
     return;
+  }
+
+  // Resolve the next box image. undefined = leave unchanged, null = clear,
+  // string = new data URL from the selected file.
+  const boxImageFile = itemAddBoxImageFileEl?.files?.[0] || null;
+  let nextBoxImage;
+  if (boxImageFile) {
+    try {
+      nextBoxImage = await fileToDataUrl(boxImageFile);
+    } catch (err) {
+      notify("Could not read the selected image.", "error", 2600);
+      return;
+    }
+  } else if (lockboxEditImageClearRequested) {
+    nextBoxImage = null;
+  } else {
+    nextBoxImage = undefined;
   }
 
   if (itemEditSource === "location") {
@@ -1717,10 +1787,12 @@ async function submitLockboxMetadataEdit(target) {
     form.append("actor_longitude", String(state.physicalPosition.lng));
     if (boxName) form.append("box_name", boxName);
     form.append("box_description", boxDescription);
-    if (boxImage) {
-      form.append("box_image", boxImage);
-    } else {
-      form.append("box_image_clear", "true");
+    if (nextBoxImage !== undefined) {
+      if (nextBoxImage) {
+        form.append("box_image", nextBoxImage);
+      } else {
+        form.append("box_image_clear", "true");
+      }
     }
     if (boxUrl) {
       form.append("box_url", boxUrl);
@@ -1746,12 +1818,15 @@ async function submitLockboxMetadataEdit(target) {
       await loadNearby(virtual.lat, virtual.lng, false);
     }
   } else {
-    updateInventoryItem(target.id, {
+    const patch = {
       box_name: normalizeOptionalText(boxName),
       box_description: normalizeOptionalText(boxDescription),
-      box_image: normalizeOptionalUrl(boxImage),
       box_url: normalizeOptionalUrl(boxUrl),
-    });
+    };
+    if (nextBoxImage !== undefined) {
+      patch.box_image = nextBoxImage;
+    }
+    updateInventoryItem(target.id, patch);
     renderInventory();
   }
 
