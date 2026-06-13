@@ -46,3 +46,9 @@ When changing map behavior, verify:
 - Do not rewrite unrelated files.
 - Do not modify persistent user data formats without explicit request.
 - If introducing temporary diagnostics, remove them before finalizing unless asked to keep them.
+
+## Agent Integration
+The repository provides a compact sub-agent `code-researcher` (stored in `.github/agents/code-researcher.agent.md`). The main Copilot agent SHOULD invoke this sub-agent when a task requires focused, iterative code exploration or repeated short searches across the repo to save token/context costs. Guidance:
+- Use the `code-researcher` when the work is research-heavy, requires multiple small read/search runs, or when the caller can provide a 1-3 line objective and minimal file/symbol context.
+- The sub-agent has limited tools: `run_in_terminal`, `read_file`, `fetch_webpage`, and `grep_search`. Do not expect it to perform broad or interactive tasks beyond these.
+- If the task involves complex multi-file edits or long-running builds/tests, prefer the main agent instead of the sub-agent.
