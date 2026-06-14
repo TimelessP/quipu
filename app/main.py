@@ -35,8 +35,8 @@ from app.spatial import haversine_meters
 from typing import cast
 import app.storage as storage_module
 
-app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260614-03"
+app = FastAPI(title="Quipu MVP", version="0.1.0", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
+ASSET_VERSION = "20260614-04"
 
 app.add_middleware(
     CORSMiddleware,
