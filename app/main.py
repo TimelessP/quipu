@@ -10,7 +10,7 @@ import h3
 import json
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
 
@@ -36,7 +36,7 @@ from typing import cast
 import app.storage as storage_module
 
 app = FastAPI(title="Quipu MVP", version="0.1.0")
-ASSET_VERSION = "20260607-08"
+ASSET_VERSION = "20260614-03"
 
 app.add_middleware(
     CORSMiddleware,
@@ -808,14 +808,52 @@ class CacheControlStaticFiles(StaticFiles):
 
 app.mount(
     "/uploads",
+    # The following parameters mean:
+    # - Cache-Control:
+    #   public: allow caching by any cache
+    #   max-age=31536000: cache for 1 year
+    #   immutable: the resource will never change, so caches can store it indefinitely
     CacheControlStaticFiles(directory=config.UPLOADS_DIR, cache_control="public, max-age=31536000, immutable"),
     name="uploads",
 )
+
 app.mount(
     "/static",
+    # The following parameters mean:
+    # - Cache-Control:
+    #   public: allow caching by any cache
+    #   max-age=31536000: cache for 1 year
+    #   immutable: the resource will never change, so caches can store it indefinitely
+    # These can only be cleared from server-side by changing the ASSET_VERSION in the HTML, which will cause clients to request new assets.
+    # As such, we will need to have a specific route for the version, and that will expressly have a short cache period.
     CacheControlStaticFiles(directory="app/static", cache_control="public, max-age=31536000, immutable"),
     name="static",
 )
+
+# TODO: Consider using a more robust solution for cache-busting static assets, such as including a hash of the file contents in the filename or using a build tool to manage asset versioning.
+@app.get("/manifest.json")
+def get_manifest() -> JSONResponse:
+    manifest = Path("app/static/manifest.json").read_text(encoding="utf-8").replace("__ASSET_VERSION__", ASSET_VERSION)
+    # return json.loads(manifest)
+    # shows the response with double quotes around it instead of json data.
+    return JSONResponse(
+        content=json.loads(manifest),
+        # The following parameters mean:
+        # - Cache-Control: public, max-age=5: cache for 5 seconds
+        # - stale-while-revalidate=86400: allow serving stale content for 1 day while revalidating in the background
+        headers={"Cache-Control": "public, max-age=5, stale-while-revalidate=86400"},
+    )
+
+
+@app.get("/version")
+def get_version() -> JSONResponse:
+    return JSONResponse(
+        {"version": ASSET_VERSION},
+        # The following parameters mean:
+        # - Cache-Control: public, max-age=5: cache for 5 seconds
+        # - stale-while-revalidate=86400: allow serving stale content for 1 day while revalidating in the background
+        headers={"Cache-Control": "public, max-age=5, stale-while-revalidate=86400"},
+    )
 
 
 @app.get("/")
@@ -829,5 +867,8 @@ def index(request: Request) -> HTMLResponse:
     )
     return HTMLResponse(
         html,
+        # The following parameters mean:
+        # - Cache-Control: public, max-age=300: cache for 5 minutes
+        # - stale-while-revalidate=86400: allow serving stale content for 1 day while revalidating in the background
         headers={"Cache-Control": "public, max-age=300, stale-while-revalidate=86400"},
     )
