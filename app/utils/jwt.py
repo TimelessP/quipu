@@ -1,7 +1,7 @@
 # utils/jwt.py
 from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
-from config import APP_SECRET_KEY
+from app.config import APP_SECRET_KEY
 
 ALGORITHM = "HS256"
 EXPIRE_MINUTES = 60

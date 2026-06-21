@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
-from routers.google_auth import router as google_router
+from app.routers.google_auth import router as google_router
 
 from app import config
 from app.dependencies.auth import get_current_user
@@ -37,8 +37,8 @@ from app.spatial import haversine_meters
 from typing import cast
 import app.storage as storage_module
 
-app = FastAPI(title="Quipu MVP", version="0.1.0", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
-ASSET_VERSION = "20260614-04"
+app = FastAPI(title="Quipu MVP", version="0.1.1", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
+ASSET_VERSION = "20260621-01"
 app.include_router(google_router)
 
 app.add_middleware(

@@ -3,8 +3,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from urllib.parse import urlencode
-from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
-from utils.jwt import create_session_token  # your own JWT utility
+from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
+from app.utils.jwt import create_session_token  # your own JWT utility
 
 router = APIRouter(prefix="/auth/google", tags=["auth"])
 

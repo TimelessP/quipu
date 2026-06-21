@@ -4,16 +4,16 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 IS_PRODUCTION: bool = os.getenv("ENV", "development").strip().lower() == "production"
 
-GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI  = os.getenv("GOOGLE_REDIRECT_URI")  # differs per env
+GOOGLE_CLIENT_ID     = os.getenv("OIDC_GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("OIDC_GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI  = os.getenv("OIDC_GOOGLE_REDIRECT_URI")  # differs per env
 APP_SECRET_KEY: str  = os.getenv("APP_SECRET_KEY", "")        # for your own JWTs
 if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI and APP_SECRET_KEY):
-    raise ValueError("Missing required environment variables: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, APP_SECRET_KEY")
+    raise ValueError("Missing required environment variables: OIDC_GOOGLE_CLIENT_ID, OIDC_GOOGLE_CLIENT_SECRET, OIDC_GOOGLE_REDIRECT_URI, APP_SECRET_KEY")
 
 DATA_DIR = Path(os.getenv("QUIPU_DATA_DIR", "./data")).resolve()
 ITEMS_DIR = DATA_DIR / "items"
