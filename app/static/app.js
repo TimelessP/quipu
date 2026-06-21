@@ -29,6 +29,48 @@ const state = {
   visitCounterViewedIds: new Set(),
 };
 
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+const AUTH_TOKEN_KEY = "quipuAuthToken";
+
+function getAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+function storeAuthToken(token) {
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+function clearAuthToken() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+}
+
+// Consume ?#auth_token=... from the OAuth callback redirect, store and clean URL.
+(function consumeAuthTokenFromUrl() {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#auth_token=")) return;
+  const token = hash.slice("#auth_token=".length);
+  if (token) storeAuthToken(token);
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+})();
+
+// Central authenticated fetch — injects Bearer token, handles 401.
+async function apiFetch(url, options = {}) {
+  const token = getAuthToken();
+  if (!token) {
+    window.location.href = "/auth/google/login";
+    return Promise.reject(new Error("Not authenticated"));
+  }
+  const headers = { ...(options.headers || {}), Authorization: `Bearer ${token}` };
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    clearAuthToken();
+    window.location.href = "/auth/google/login";
+    return Promise.reject(new Error("Session expired"));
+  }
+  return response;
+}
+
 const AREA_OF_EFFECT_RADIUS_METERS = 15; // central interaction/ring radius
 const PICKUP_RANGE_METERS = AREA_OF_EFFECT_RADIUS_METERS;
 const RANGE_RING_VISIBLE_ZOOM = 18;
@@ -480,7 +522,7 @@ async function validateLinkedPortalSession() {
   const checks = await Promise.all(
     uniqueIds.map(async (itemId) => {
       try {
-        const response = await fetch(`/api/items/${itemId}`, { cache: "no-store" });
+        const response = await apiFetch(`/api/items/${itemId}`, { cache: "no-store" });
         if (!response.ok) {
           return { itemId, missing: response.status === 404, invalid: true };
         }
@@ -1049,7 +1091,7 @@ async function fetchLockboxEncryptedContents(session) {
     const entry = state.inventory.find((i) => i.id === session.id);
     return entry?.encrypted_contents || "";
   }
-  const resp = await fetch(`/api/items/${session.id}`);
+  const resp = await apiFetch(`/api/items/${session.id}`);
   if (!resp.ok) throw new Error(await resp.text());
   const json = await resp.json();
   return json.encrypted_contents || "";
@@ -1269,7 +1311,7 @@ async function saveLockboxSession() {
       const form = new URLSearchParams();
       form.append("actor", state.ownerId);
       form.append("encrypted_contents", hex);
-      const resp = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${lockboxSession.id}/set-contents`, {
+      const resp = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${lockboxSession.id}/set-contents`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form,
@@ -1801,7 +1843,7 @@ async function submitLockboxMetadataEdit(target) {
     }
 
     try {
-      const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/lockbox`, {
+      const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/lockbox`, {
         method: "PATCH",
         body: form,
       });
@@ -2032,7 +2074,7 @@ const ITEM_FLOW_BEHAVIORS = {
           if (item.favorite_portal_name) form.append("favorite_portal_name", item.favorite_portal_name);
         }
         form.append("file", dataUrlToFile(item.content_data_url, `${item.id}.png`, "image/png"));
-        const response = await fetch(`/api/dimensions/${state.dimensionRootId}/media`, {
+        const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/media`, {
           method: "POST",
           body: form,
         });
@@ -2104,7 +2146,7 @@ const ITEM_FLOW_BEHAVIORS = {
         form.append("favorite_portal_longitude", String(item.favorite_portal_longitude));
         if (item.favorite_portal_name) form.append("favorite_portal_name", item.favorite_portal_name);
         form.append("file", dataUrlToFile(item.content_data_url, `${item.id}.png`, "image/png"));
-        const response = await fetch(`/api/dimensions/${state.dimensionRootId}/media`, {
+        const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/media`, {
           method: "POST",
           body: form,
         });
@@ -2934,7 +2976,7 @@ async function fetchJsonWithCache(key, url, preferCache = true, options = null) 
       }
     }
   }
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   if (!response.ok) {
     const error = new Error(await response.text());
     error.status = response.status;
@@ -2972,7 +3014,7 @@ function dataUrlToFile(dataUrl, filename, contentType) {
 }
 
 async function sendJson(url, body) {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -2984,7 +3026,7 @@ async function sendJson(url, body) {
 }
 
 async function getDefaultDimension() {
-  const response = await fetch("/api/dimensions/default");
+  const response = await apiFetch("/api/dimensions/default");
   const payload = await response.json();
   state.dimensionRootId = payload.root_id;
   dimensionStatusEl.textContent = `Dimension: ${state.dimensionRootId}`;
@@ -3973,7 +4015,7 @@ async function updatePortalDetails(portal) {
     }
     if (portalImageFile) form.append("file", portalImageFile);
 
-    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${targetPortal.id}/portal-details`, {
+    const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${targetPortal.id}/portal-details`, {
       method: "PATCH",
       body: form,
     });
@@ -4034,7 +4076,7 @@ async function incrementVisitCounterView(item) {
   state.visitCounterViewedIds.add(item.id);
 
   try {
-    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${item.id}/visit-counter`, {
+    const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${item.id}/visit-counter`, {
       method: "POST",
     });
     if (!response.ok) throw new Error(await response.text());
@@ -4049,7 +4091,7 @@ async function incrementVisitCounterView(item) {
 async function deleteWorldItemSilently(itemId) {
   if (!itemId || !state.dimensionRootId) return false;
   try {
-    const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${itemId}`, { method: "DELETE" });
+    const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${itemId}`, { method: "DELETE" });
     if (!response.ok) return false;
   } catch {
     return false;
@@ -4549,7 +4591,7 @@ async function placePortal() {
     if (portalUrlRaw) form.append("content_url", portalUrlRaw);
     if (portalImageFile) form.append("file", portalImageFile);
 
-    const response = await fetch(url, { method: "POST", body: form });
+    const response = await apiFetch(url, { method: "POST", body: form });
     if (!response.ok) {
       throw new Error(await response.text());
     }
@@ -5356,7 +5398,7 @@ function saveInventory() {
 
 async function deleteLocationItem(item) {
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
       { method: "DELETE" }
     );
@@ -5441,7 +5483,7 @@ async function pickUpItem(item) {
   }
 
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
       { method: "DELETE" }
     );
@@ -5503,7 +5545,7 @@ async function removePortalItem(item) {
   });
 
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/dimensions/${state.dimensionRootId}/items/${item.id}?${params.toString()}`,
       { method: "DELETE" }
     );
@@ -5717,7 +5759,7 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
       }
 
       try {
-        const response = await fetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/content`, {
+        const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/content`, {
           method: "PATCH",
           body: form,
         });

@@ -123,6 +123,15 @@ curl -sI https://quipu.timelessprototype.com/ | grep -i content-security-policy
 curl -s https://quipu.timelessprototype.com/ | grep -i '/cdn-cgi/challenge-platform' || true
 ```
 
+## Google authentication
+
+Configure the app and client ID and secret etc. here:
+
+[https://console.cloud.google.com/](https://console.cloud.google.com/)
+
+Then copy `example.env` to `.env` and update those environment variable values.
+
+
 ## Data layout
 
 - `data/meta.json` - dimension metadata

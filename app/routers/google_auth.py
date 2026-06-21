@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from urllib.parse import urlencode
 from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
 from app.utils.jwt import create_session_token  # your own JWT utility
+from fastapi.responses import RedirectResponse
 
 router = APIRouter(prefix="/auth/google", tags=["auth"])
 
@@ -59,7 +60,10 @@ async def google_callback(code: str):
     # ... your DB upsert logic ...
 
     # 4. Issue your own session JWT
-    session_token = create_session_token({"sub": email, "name": user_info.get("name")})
-
+    # session_token = create_session_token({"sub": email, "name": user_info.get("name")})
     # 5. Return token — or redirect with it set as a cookie
-    return {"access_token": session_token, "token_type": "bearer"}
+    # return {"access_token": session_token, "token_type": "bearer"}
+
+    # We redirect for the SPA to pick up the token from the URL fragment (not sent to server)
+    session_token = create_session_token({"sub": email, "name": user_info.get("name")})
+    return RedirectResponse(url=f"/#auth_token={session_token}")
