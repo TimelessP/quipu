@@ -8,13 +8,15 @@ from pathlib import Path
 
 import h3
 import json
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import HttpUrl
+from routers.google_auth import router as google_router
 
 from app import config
+from app.dependencies.auth import get_current_user
 from app.models import (
     FavoritePortalItemDocument,
     ItemDocument,
@@ -37,11 +39,12 @@ import app.storage as storage_module
 
 app = FastAPI(title="Quipu MVP", version="0.1.0", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
 ASSET_VERSION = "20260614-04"
+app.include_router(google_router)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ALLOW_ORIGINS,
-    allow_credentials=False,
+    allow_credentials=False,  # uses bearer token auth, so no cookies
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -166,14 +169,17 @@ def _validate_portal_spacing(root_id: str, latitude: float, longitude: float) ->
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
+@app.get("/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    return {"email": user["sub"], "name": user["name"]}
 
 @app.get("/api/dimensions/default")
-def get_default_dimension() -> dict[str, str]:
+def get_default_dimension(user: dict = Depends(get_current_user)) -> dict[str, str]:
     return {"root_id": storage.get_default_dimension_root_id()}
 
 
 @app.get("/api/items/{item_id}")
-def get_item(item_id: str) -> dict:
+def get_item(item_id: str, user: dict = Depends(get_current_user)) -> dict:
     item = storage.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -190,10 +196,15 @@ def _validate_upload_path(upload_path: str) -> None:
         raise HTTPException(status_code=400, detail="Upload file not found")
 
 
-def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_path: str | None = None) -> ItemDocument:
+def _create_item_from_request(
+    root_id: str,
+    request: PlaceItemRequest,
+    user: dict,
+    upload_path: str | None = None,
+) -> ItemDocument:
     cell_id = h3.latlng_to_cell(request.latitude, request.longitude, config.H3_RESOLUTION)
     id_ = str(uuid.uuid4())
-    owner_ = str(request.owner)
+    owner_ = user["sub"]  # old untrusted way: str(request.owner)
     latitude_ = float(request.latitude)
     longitude_ = float(request.longitude)
     accuracy_meters_ = request.accuracy_meters
@@ -300,20 +311,19 @@ def _create_item_from_request(root_id: str, request: PlaceItemRequest, upload_pa
 
 
 @app.post("/api/dimensions/{root_id}/items")
-def place_item(root_id: str, request: PlaceItemRequest) -> dict:
+def place_item(root_id: str, request: PlaceItemRequest, user: dict = Depends(get_current_user)) -> dict:
     _validate_accuracy(request.accuracy_meters)
 
     if request.type == ItemType.PORTAL_MARKER:
         _validate_portal_spacing(root_id, request.latitude, request.longitude)
 
-    item = _create_item_from_request(root_id, request)
+    item = _create_item_from_request(root_id, request, user=user)
     return item.model_dump(mode="json")
 
 
 @app.post("/api/dimensions/{root_id}/portals")
 async def place_portal_multipart(
     root_id: str,
-    owner: str = Form(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
     accuracy_meters: float | None = Form(default=None),
@@ -321,6 +331,7 @@ async def place_portal_multipart(
     content_text: str | None = Form(default=None),
     content_url: HttpUrl | None = Form(default=None),
     file: UploadFile | None = File(default=None),
+    user: dict = Depends(get_current_user)
 ) -> dict:
     _validate_accuracy(accuracy_meters)
     _validate_portal_spacing(root_id, latitude, longitude)
@@ -341,7 +352,7 @@ async def place_portal_multipart(
 
     request = PlacePortalMarkerItemRequest(
         type=ItemType.PORTAL_MARKER,
-        owner=owner,
+        owner=user["sub"],  # old untrusted way: owner
         latitude=latitude,
         longitude=longitude,
         accuracy_meters=accuracy_meters,
@@ -350,7 +361,7 @@ async def place_portal_multipart(
         content_url=content_url,
     )
 
-    item = _create_item_from_request(root_id, request, upload_path=upload_path)
+    item = _create_item_from_request(root_id, request, upload_path=upload_path, user=user)
     return item.model_dump(mode="json")
 
 
@@ -360,6 +371,7 @@ def pick_up_item(
     item_id: str,
     actor_latitude: float | None = None,
     actor_longitude: float | None = None,
+    user: dict = Depends(get_current_user)
 ) -> dict:
     """Remove an item from the world.
 
@@ -394,7 +406,7 @@ def pick_up_item(
 
 
 @app.post("/api/dimensions/{root_id}/items/{item_id}/visit-counter")
-def increment_visit_counter(root_id: str, item_id: str) -> dict:
+def increment_visit_counter(root_id: str, item_id: str, user: dict = Depends(get_current_user)) -> dict:
     item = storage.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -410,7 +422,7 @@ def increment_visit_counter(root_id: str, item_id: str) -> dict:
 
 
 @app.patch("/api/dimensions/{root_id}/items/{item_id}/portal-name")
-def rename_portal(root_id: str, item_id: str, request: RenamePortalRequest) -> dict:
+def rename_portal(root_id: str, item_id: str, request: RenamePortalRequest, user: dict = Depends(get_current_user)) -> dict:
     item = storage.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -447,6 +459,7 @@ async def update_portal_details(
     content_url_clear: str | None = Form(default=None),
     content_upload_clear: str | None = Form(default=None),
     file: UploadFile | None = File(default=None),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     item = storage.get_item(item_id)
     if item is None:
@@ -526,6 +539,7 @@ async def update_world_item_content(
     content_url_clear: str | None = Form(default=None),
     content_upload_clear: str | None = Form(default=None),
     file: UploadFile | None = File(default=None),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     item = storage.get_item(item_id)
     if item is None:
@@ -632,7 +646,6 @@ async def update_world_item_content(
 @app.post("/api/dimensions/{root_id}/photos")
 async def place_media(
     root_id: str,
-    owner: str = Form(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
     accuracy_meters: float | None = Form(default=None),
@@ -645,6 +658,7 @@ async def place_media(
     favorite_portal_longitude: float | None = Form(default=None),
     favorite_portal_name: str | None = Form(default=None),
     file: UploadFile = File(...),
+    user: dict = Depends(get_current_user)
 ) -> dict:
     _validate_accuracy(accuracy_meters)
 
@@ -674,7 +688,7 @@ async def place_media(
         payload = {
             "id": str(uuid.uuid4()),
             "type": item_type,
-            "owner": owner,
+            "owner": user["sub"],
             "latitude": latitude,
             "longitude": longitude,
             "accuracy_meters": accuracy_meters,
@@ -689,7 +703,7 @@ async def place_media(
         payload = {
             "id": str(uuid.uuid4()),
             "type": item_type,
-            "owner": owner,
+            "owner":  user["sub"],
             "latitude": latitude,
             "longitude": longitude,
             "accuracy_meters": accuracy_meters,
@@ -711,7 +725,7 @@ async def place_media(
 
 
 @app.get("/api/dimensions/{root_id}/cells/{cell_id}/item-ids")
-def get_cell_item_ids(root_id: str, cell_id: str) -> dict:
+def get_cell_item_ids(root_id: str, cell_id: str, user: dict = Depends(get_current_user)) -> dict:
     cell = storage.get_cell(root_id, cell_id)
     if cell is None:
         return {"item_ids": []}
@@ -723,7 +737,7 @@ def get_cell_item_ids(root_id: str, cell_id: str) -> dict:
 # writes it back through set-contents below. The server never sees the numeric
 # code or the decrypted contents.
 @app.post("/api/dimensions/{root_id}/items/{item_id}/set-contents")
-def set_lock_box_contents(root_id: str, item_id: str, actor: str = Form(...), encrypted_contents: str = Form(...)) -> dict:
+def set_lock_box_contents(root_id: str, item_id: str, encrypted_contents: str = Form(...), user: dict = Depends(get_current_user)) -> dict:
     """
     Persist the provided encrypted payload for the lock box. The server does not accept or inspect plaintext contents or codes.
     Responsibility for validating ownership of moved items is on the client when constructing the encrypted payload.
@@ -754,6 +768,7 @@ def update_lock_box_metadata(
     box_image_clear: str | None = Form(default=None),
     box_url: HttpUrl | None = Form(default=None),
     box_url_clear: str | None = Form(default=None),
+    user: dict = Depends(get_current_user)
 ) -> dict:
     item = storage.get_item(item_id)
     if item is None:

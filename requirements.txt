@@ -2,3 +2,8 @@ fastapi==0.115.12
 uvicorn[standard]==0.30.6
 python-multipart==0.0.20
 h3==4.1.2
+
+httpx
+python-jose[cryptography]
+python-dotenv
+google-auth
