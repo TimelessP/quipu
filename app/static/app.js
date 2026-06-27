@@ -1287,11 +1287,37 @@ function commitLockboxWorkingInventory(extraInventoryItems = []) {
   const heldFavoritePortalIds = new Set(
     held.filter((e) => e.inventorySource === "favorite" && e.portalId).map((e) => e.portalId)
   );
+  
+  // ✅ Also extract favorite_portal_item types from lockbox to portal favorites
+  const extractedFavorites = [];
+  for (const item of held) {
+    if (item.type === "favorite_portal_item" && item.favorite_portal_id) {
+      heldFavoritePortalIds.add(item.favorite_portal_id);
+      extractedFavorites.push({
+        id: item.favorite_portal_id,
+        latitude: item.favorite_portal_latitude,
+        longitude: item.favorite_portal_longitude,
+        portal_name: item.favorite_portal_name ?? null,
+        content_name: item.content_name ?? null,
+        content_text: item.content_text ?? null,
+        content_url: item.content_url ?? null,
+        content_upload_path: item.content_upload_path ?? null,
+        content_data_url: item.content_data_url ?? null,
+      });
+    }
+  }
+  
   const nextFavorites = loadPortalFavorites().filter((f) => heldFavoritePortalIds.has(f.id));
+  // Add extracted favorites (with deduplication)
+  for (const fav of extractedFavorites) {
+    if (!nextFavorites.some((f) => f.id === fav.id)) {
+      nextFavorites.push(fav);
+    }
+  }
   savePortalFavorites(nextFavorites);
 
   const heldRegular = held
-    .filter((e) => e.inventorySource !== "favorite")
+    .filter((e) => e.inventorySource !== "favorite" && e.type !== "favorite_portal_item")
     .map((e) => normalizeInventoryItem(e));
   state.inventory = [...extraInventoryItems, ...heldRegular];
 }
@@ -5498,18 +5524,21 @@ async function pickUpItem(item) {
 
   if (item.type === "favorite_portal_item") {
     const favorites = loadPortalFavorites();
-    favorites.push({
-      id: item.favorite_portal_id,
-      latitude: item.favorite_portal_latitude,
-      longitude: item.favorite_portal_longitude,
-      portal_name: item.favorite_portal_name ?? null,
-      content_name: item.content_name ?? null,
-      content_text: item.content_text ?? null,
-      content_url: item.content_url ?? null,
-      content_upload_path: item.content_upload_path ?? null,
-      content_data_url: item.content_data_url ?? null,
-    });
-    savePortalFavorites(favorites);
+    // ✅ Prevent duplicates before adding
+    if (!favorites.some((f) => f.id === item.favorite_portal_id)) {
+      favorites.push({
+        id: item.favorite_portal_id,
+        latitude: item.favorite_portal_latitude,
+        longitude: item.favorite_portal_longitude,
+        portal_name: item.favorite_portal_name ?? null,
+        content_name: item.content_name ?? null,
+        content_text: item.content_text ?? null,
+        content_url: item.content_url ?? null,
+        content_upload_path: item.content_upload_path ?? null,
+        content_data_url: item.content_data_url ?? null,
+      });
+      savePortalFavorites(favorites);
+    }
     renderPortalModal();
   } else {
     state.inventory.push(normalizeInventoryItem({ ...item }));

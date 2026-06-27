@@ -38,7 +38,7 @@ from typing import cast
 import app.storage as storage_module
 
 app = FastAPI(title="Quipu MVP", version="0.1.2", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
-ASSET_VERSION = "20260621-02"
+ASSET_VERSION = "20260627-00"
 app.include_router(google_router)
 
 app.add_middleware(
