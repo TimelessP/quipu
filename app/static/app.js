@@ -1,3 +1,32 @@
+// Clear Quipu-specific cache if app version changed
+(function clearCacheIfVersionChanged() {
+  const currentVersion = window.QUIPU_ASSET_VERSION || "unknown";
+  const storedVersion = localStorage.getItem("quipuAssetVersion");
+
+  if (storedVersion && storedVersion !== currentVersion) {
+    // Version changed: clear all Quipu-specific storage
+    const keysToDelete = Object.keys(localStorage).filter((k) => k.startsWith("quipu"));
+    for (const key of keysToDelete) {
+      localStorage.removeItem(key);
+    }
+    console.log(`[Quipu] Cleared cache (version: ${storedVersion} → ${currentVersion})`);
+  }
+
+  // Store current version
+  localStorage.setItem("quipuAssetVersion", currentVersion);
+
+  // Clear Cache API for this app (only clears service worker caches matching 'quipu-')
+  if ("caches" in window) {
+    caches.keys().then((cacheNames) => {
+      cacheNames.forEach((name) => {
+        if (name.startsWith("quipu-")) {
+          caches.delete(name);
+        }
+      });
+    });
+  }
+})();
+
 const state = {
   ownerId: localStorage.getItem("quipuOwnerId") || crypto.randomUUID(),
   dimensionRootId: null,
@@ -70,6 +99,213 @@ async function apiFetch(url, options = {}) {
   }
   return response;
 }
+
+// ── EventEmitter ──────────────────────────────────────────────────────────────
+
+class EventEmitter {
+  constructor() {
+    this.listeners = {};
+  }
+
+  on(event, callback) {
+    if (!this.listeners[event]) this.listeners[event] = [];
+    this.listeners[event].push(callback);
+  }
+
+  emit(event, data) {
+    if (this.listeners[event]) {
+      for (const callback of this.listeners[event]) {
+        callback(data);
+      }
+    }
+  }
+
+  off(event, callback) {
+    if (!this.listeners[event]) return;
+    this.listeners[event] = this.listeners[event].filter((cb) => cb !== callback);
+  }
+}
+
+const itemEventEmitter = new EventEmitter();
+
+// ── ItemActions ────────────────────────────────────────────────────────────────
+
+const ItemActions = {
+  async placeItemAtLocation(item, editedName, editedText, editedUrl) {
+    const virtual = getVirtualPosition();
+    if (!virtual || !state.physicalPosition) {
+      notify("GPS position needed to place an item.", "error");
+      return false;
+    }
+
+    try {
+      if (!navigator.onLine) throw new Error("offline");
+      const behavior = getItemFlowBehavior(item.type);
+      const placeError = await behavior.placeAtLocation({
+        state,
+        virtual,
+        item,
+        getPlacementAccuracyMeters,
+        editedName,
+        editedText,
+        editedUrl,
+      });
+      if (placeError) {
+        notify(placeError, "error");
+        return false;
+      }
+    } catch (err) {
+      notify(parseErrorMessage(err) || "Could not place inventory item. Try again when online.", "error", 3200);
+      return false;
+    }
+
+    itemEventEmitter.emit("itemPlaced", { item });
+    return true;
+  },
+
+  async removeItemFromWorld(item) {
+    try {
+      const response = await apiFetch(
+        `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        notify(`Could not remove item: ${await response.text()}`, "error", 4000);
+        return false;
+      }
+    } catch {
+      notify("Network error removing item. Try again.", "error");
+      return false;
+    }
+
+    const virtual = getVirtualPosition();
+    if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
+    notify("Item deleted.", "success", 2000);
+    itemEventEmitter.emit("itemRemovedFromWorld", { item });
+    return true;
+  },
+
+  async removeFromInventory(item) {
+    if (item.inventorySource === "favorite") {
+      removePortalFavoriteById(item.portalId);
+      renderPortalModal();
+    } else {
+      removeFromInventory(item.id);
+    }
+    renderInventory();
+    notify("Item deleted.", "success", 2000);
+    itemEventEmitter.emit("itemRemovedFromInventory", { item });
+    return true;
+  },
+
+  async pickUpItemFromWorld(item) {
+    if (item.type === "favorite_portal_item" && inventoryHasFavoritePortal(item.favorite_portal_id)) {
+      notify("This portal is already in your favourites.", "info", 2600);
+      return false;
+    }
+
+    try {
+      const response = await apiFetch(
+        `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        notify(`Could not pick up item: ${await response.text()}`, "error", 4000);
+        return false;
+      }
+    } catch {
+      notify("Network error picking up item. Try again.", "error");
+      return false;
+    }
+
+    if (item.type === "favorite_portal_item") {
+      const favorites = loadPortalFavorites();
+      if (!favorites.some((f) => f.id === item.favorite_portal_id)) {
+        favorites.push({
+          id: item.favorite_portal_id,
+          latitude: item.favorite_portal_latitude,
+          longitude: item.favorite_portal_longitude,
+          portal_name: item.favorite_portal_name ?? null,
+          content_name: item.content_name ?? null,
+          content_text: item.content_text ?? null,
+          content_url: item.content_url ?? null,
+          content_upload_path: item.content_upload_path ?? null,
+          content_data_url: item.content_data_url ?? null,
+        });
+        savePortalFavorites(favorites);
+      }
+      renderPortalModal();
+    } else {
+      state.inventory.push(normalizeInventoryItem({ ...item }));
+      saveInventory();
+    }
+
+    renderInventory();
+    const virtual = getVirtualPosition();
+    if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
+    itemEventEmitter.emit("itemPickedUpFromWorld", { item });
+    return true;
+  },
+
+  async removePortalItem(item) {
+    if (!state.physicalPosition) {
+      notify("GPS position needed to remove a portal.", "error");
+      return false;
+    }
+
+    const distance = haversineMeters(
+      state.physicalPosition.lat,
+      state.physicalPosition.lng,
+      item.latitude,
+      item.longitude
+    );
+    if (distance > PORTAL_REMOVE_RANGE_METERS) {
+      notify(`Move physically to within ${PORTAL_REMOVE_RANGE_METERS}m to remove this portal.`, "error", 3200);
+      return false;
+    }
+
+    const params = new URLSearchParams({
+      actor_latitude: String(state.physicalPosition.lat),
+      actor_longitude: String(state.physicalPosition.lng),
+    });
+
+    try {
+      const response = await apiFetch(
+        `/api/dimensions/${state.dimensionRootId}/items/${item.id}?${params.toString()}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        notify(`Could not remove portal: ${await response.text()}`, "error", 4200);
+        return false;
+      }
+    } catch {
+      notify("Network error removing portal. Try again.", "error");
+      return false;
+    }
+
+    invalidatePortalCache(item.id);
+
+    if (state.selectedLocalPortalId === item.id || state.selectedRemotePortalId === item.id) {
+      clearPortalLink(false);
+    }
+
+    reconcileMissingItem(item.id);
+
+    const virtual = getVirtualPosition();
+    if (virtual) {
+      await loadNearby(virtual.lat, virtual.lng, false);
+    }
+    notify("Portal removed.", "success", 2200);
+    itemEventEmitter.emit("portalItemRemoved", { item });
+    return true;
+  },
+
+  removeFavoritePortal(portalId) {
+    removePortalFavoriteById(portalId);
+    renderPortalModal();
+    itemEventEmitter.emit("favoritePortalRemoved", { portalId });
+  },
+};
 
 const AREA_OF_EFFECT_RADIUS_METERS = 15; // central interaction/ring radius
 const PICKUP_RANGE_METERS = AREA_OF_EFFECT_RADIUS_METERS;
@@ -177,6 +413,7 @@ const imageViewerStageEl = document.getElementById("image-viewer-stage");
 const imageViewerImageEl = document.getElementById("image-viewer-image");
 const settingsThemeCycleButtonEl = document.getElementById("settings-theme-cycle");
 const settingsFollowPlayerButtonEl = document.getElementById("settings-follow-player");
+const settingsDeleteLocalDataButtonEl = document.getElementById("settings-delete-local-data");
 const portalNameInputEl = document.getElementById("portal-name-input");
 const portalContentTextEl = document.getElementById("portal-content-text");
 const portalContentUrlEl = document.getElementById("portal-content-url");
@@ -1850,9 +2087,14 @@ async function submitLockboxMetadataEdit(target) {
       notify("GPS position needed to edit a world lock box.", "error", 2600);
       return;
     }
+    // Interactions follow the effective actor position: the virtual (remote)
+    // location while teleported, the physical location otherwise. The item being
+    // edited lives at that effective location, so the server proximity check must
+    // see matching coordinates.
+    const actor = getEffectiveActorPosition();
     const form = new FormData();
-    form.append("actor_latitude", String(state.physicalPosition.lat));
-    form.append("actor_longitude", String(state.physicalPosition.lng));
+    form.append("actor_latitude", String(actor.lat));
+    form.append("actor_longitude", String(actor.lng));
     if (boxName) form.append("box_name", boxName);
     form.append("box_description", boxDescription);
     if (nextBoxImage !== undefined) {
@@ -2638,7 +2880,8 @@ function applyVirtualOffset(nextOffset, options = {}) {
   }
   refreshLocationAndNearby(preferCache);
   drawPortalLink();
-  renderNearbyItemList();
+  // renderNearbyItemList() is already called within loadNearby() after items are fetched,
+  // so calling it here would render stale items (old location's items) before the fetch completes.
   updatePortalHud();
 }
 
@@ -3014,15 +3257,29 @@ async function fetchJsonWithCache(key, url, preferCache = true, options = null) 
   return payload;
 }
 
-function getDistanceAwareCellCacheTtlMs(cellId, originLat, originLng, h3Api) {
-  if (!Number.isFinite(originLat) || !Number.isFinite(originLng)) return PORTAL_CACHE_TTL_MS;
+function getDistanceAwareCellCacheTtlMs(cellId, h3Api, actorLat, actorLng, mapCenterLat, mapCenterLng, physicalLat, physicalLng) {
   if (!h3Api || typeof h3Api.cellToLatLng !== "function") return PORTAL_CACHE_TTL_MS;
 
   try {
     const [cellLat, cellLng] = h3Api.cellToLatLng(cellId);
     if (!Number.isFinite(cellLat) || !Number.isFinite(cellLng)) return PORTAL_CACHE_TTL_MS;
-    const distanceMeters = haversineMeters(originLat, originLng, cellLat, cellLng);
-    const walkTimeMs = Math.max(0, (distanceMeters / WALK_SPEED_MPS) * 1000);
+
+    // Calculate distance from cell to each available origin, use least distance for freshest cache
+    const distances = [];
+
+    if (Number.isFinite(actorLat) && Number.isFinite(actorLng)) {
+      distances.push(haversineMeters(actorLat, actorLng, cellLat, cellLng));
+    }
+    if (Number.isFinite(mapCenterLat) && Number.isFinite(mapCenterLng)) {
+      distances.push(haversineMeters(mapCenterLat, mapCenterLng, cellLat, cellLng));
+    }
+    if (Number.isFinite(physicalLat) && Number.isFinite(physicalLng)) {
+      distances.push(haversineMeters(physicalLat, physicalLng, cellLat, cellLng));
+    }
+
+    if (distances.length === 0) return PORTAL_CACHE_TTL_MS;
+    const minDistanceMeters = Math.min(...distances);
+    const walkTimeMs = Math.max(0, (minDistanceMeters / WALK_SPEED_MPS) * 1000);
     return PORTAL_CACHE_TTL_MS + walkTimeMs;
   } catch {
     return PORTAL_CACHE_TTL_MS;
@@ -3834,8 +4091,10 @@ function renderPortalModal() {
   const favorites = loadPortalFavorites();
   let favoritesChanged = false;
 
+  // Create a map for O(1) lookups instead of O(n) find inside map (was O(n*m))
+  const displayItemMap = new Map(state.displayItems.map(item => [item.id, item]));
   const hydratedFavorites = favorites.map((favorite) => {
-    const livePortal = state.displayItems.find((item) => item.id === favorite.id);
+    const livePortal = displayItemMap.get(favorite.id);
     if (!livePortal) return favorite;
 
     const nextName = livePortal.portal_name ?? favorite.portal_name ?? null;
@@ -4294,11 +4553,13 @@ async function loadNearby(lat, lng, preferCache = true) {
     const k = Math.max(1, Math.ceil(maxRangeMeters / edgeMeters));
     const candidateCells = h3Api.gridDisk(centerCell, k);
 
+    const physicalPos = state.physicalPosition || { lat: NaN, lng: NaN };
+    const mapCenter = state.map?.getCenter() || { lat: NaN, lng: NaN };
     const cellPayloads = await Promise.all(
       candidateCells.map((cellId) => {
         const key = `${state.dimensionRootId}:cell:${cellId}`;
         const url = `/api/dimensions/${state.dimensionRootId}/cells/${cellId}/item-ids`;
-        const maxAgeMs = getDistanceAwareCellCacheTtlMs(cellId, lat, lng, h3Api);
+        const maxAgeMs = getDistanceAwareCellCacheTtlMs(cellId, h3Api, lat, lng, mapCenter.lat, mapCenter.lng, physicalPos.lat, physicalPos.lng);
         return fetchJsonWithCache(key, url, preferCache, { maxAgeMs }).catch(() => ({ item_ids: [] }));
       })
     );
@@ -4443,11 +4704,13 @@ async function loadViewportPortals(preferCache = true) {
 
   try {
     // One keyed GET per cell — server is a pure object store, no query logic.
+    const actorPos = getEffectiveActorPosition() || { lat: NaN, lng: NaN };
+    const physicalPos = state.physicalPosition || { lat: NaN, lng: NaN };
     const cellPayloads = await Promise.all(
       cells.map((cellId) => {
         const cellKey = `${state.dimensionRootId}:cell:${cellId}`;
         const url = `/api/dimensions/${state.dimensionRootId}/cells/${cellId}/item-ids`;
-        const maxAgeMs = getDistanceAwareCellCacheTtlMs(cellId, cacheOrigin.lat, cacheOrigin.lng, h3Api);
+        const maxAgeMs = getDistanceAwareCellCacheTtlMs(cellId, h3Api, actorPos.lat, actorPos.lng, center.lat, center.lng, physicalPos.lat, physicalPos.lng);
         return fetchJsonWithCache(cellKey, url, preferCache, { maxAgeMs }).catch(() => ({ item_ids: [] }));
       })
     );
@@ -5415,6 +5678,15 @@ settingsFollowPlayerButtonEl?.addEventListener("click", () => {
   updateFollowIndicator();
   centerMapOnPlayerVirtual(true);
 });
+settingsDeleteLocalDataButtonEl?.addEventListener("click", () => {
+  if (!confirm("Delete all local data (inventory, favorites, cache)? This cannot be undone.")) {
+    return;
+  }
+  localStorage.clear();
+  notify("Local data deleted. Refresh the page to start fresh.", "success", 3000);
+  // Optionally reload the page after a delay
+  setTimeout(() => window.location.reload(), 1500);
+});
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
 
@@ -5423,23 +5695,7 @@ function saveInventory() {
 }
 
 async function deleteLocationItem(item) {
-  try {
-    const response = await apiFetch(
-      `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
-      { method: "DELETE" }
-    );
-    if (!response.ok) {
-      notify(`Could not remove item: ${await response.text()}`, "error", 4000);
-      return;
-    }
-  } catch {
-    notify("Network error removing item. Try again.", "error");
-    return;
-  }
-
-  const virtual = getVirtualPosition();
-  if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
-  notify("Item deleted.", "success", 2000);
+  await ItemActions.removeItemFromWorld(item);
 }
 
 async function downloadItem(item, sourceLabel) {
@@ -5492,152 +5748,31 @@ function removeFromInventory(itemId) {
 }
 
 function deleteInventoryItem(item) {
-  if (item.inventorySource === "favorite") {
-    removePortalFavoriteById(item.portalId);
-    renderPortalModal();
-  } else {
-    removeFromInventory(item.id);
-  }
-  renderInventory();
-  notify("Item deleted.", "success", 2000);
+  void ItemActions.removeFromInventory(item);
 }
 
 async function pickUpItem(item) {
-  if (item.type === "favorite_portal_item" && inventoryHasFavoritePortal(item.favorite_portal_id)) {
-    notify("This portal is already in your favourites.", "info", 2600);
-    return false;
-  }
-
-  try {
-    const response = await apiFetch(
-      `/api/dimensions/${state.dimensionRootId}/items/${item.id}`,
-      { method: "DELETE" }
-    );
-    if (!response.ok) {
-      notify(`Could not pick up item: ${await response.text()}`, "error", 4000);
-      return false;
-    }
-  } catch {
-    notify("Network error picking up item. Try again.", "error");
-    return false;
-  }
-
-  if (item.type === "favorite_portal_item") {
-    const favorites = loadPortalFavorites();
-    // ✅ Prevent duplicates before adding
-    if (!favorites.some((f) => f.id === item.favorite_portal_id)) {
-      favorites.push({
-        id: item.favorite_portal_id,
-        latitude: item.favorite_portal_latitude,
-        longitude: item.favorite_portal_longitude,
-        portal_name: item.favorite_portal_name ?? null,
-        content_name: item.content_name ?? null,
-        content_text: item.content_text ?? null,
-        content_url: item.content_url ?? null,
-        content_upload_path: item.content_upload_path ?? null,
-        content_data_url: item.content_data_url ?? null,
-      });
-      savePortalFavorites(favorites);
-    }
-    renderPortalModal();
-  } else {
-    state.inventory.push(normalizeInventoryItem({ ...item }));
-    saveInventory();
-  }
-
-  renderInventory();
-  const virtual = getVirtualPosition();
-  if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
-  return true;
+  return ItemActions.pickUpItemFromWorld(item);
 }
 
 async function removePortalItem(item) {
-  if (!state.physicalPosition) {
-    notify("GPS position needed to remove a portal.", "error");
-    return;
-  }
-
-  const distance = haversineMeters(
-    state.physicalPosition.lat,
-    state.physicalPosition.lng,
-    item.latitude,
-    item.longitude
-  );
-  if (distance > PORTAL_REMOVE_RANGE_METERS) {
-    notify(`Move physically to within ${PORTAL_REMOVE_RANGE_METERS}m to remove this portal.`, "error", 3200);
-    return;
-  }
-
-  const params = new URLSearchParams({
-    actor_latitude: String(state.physicalPosition.lat),
-    actor_longitude: String(state.physicalPosition.lng),
-  });
-
-  try {
-    const response = await apiFetch(
-      `/api/dimensions/${state.dimensionRootId}/items/${item.id}?${params.toString()}`,
-      { method: "DELETE" }
-    );
-    if (!response.ok) {
-      notify(`Could not remove portal: ${await response.text()}`, "error", 4200);
-      return;
-    }
-  } catch {
-    notify("Network error removing portal. Try again.", "error");
-    return;
-  }
-
-  invalidatePortalCache(item.id);
-
-  if (state.selectedLocalPortalId === item.id || state.selectedRemotePortalId === item.id) {
-    clearPortalLink(false);
-  }
-
-  reconcileMissingItem(item.id);
-
-  const virtual = getVirtualPosition();
-  if (virtual) {
-    await loadNearby(virtual.lat, virtual.lng, false);
-  }
-  notify("Portal removed.", "success", 2200);
+  await ItemActions.removePortalItem(item);
 }
 
 async function replayInventoryItem(item, editedName, editedText, editedUrl) {
-  const virtual = getVirtualPosition();
-  if (!virtual || !state.physicalPosition) {
-    notify("GPS position needed to place an item.", "error");
-    return;
-  }
-
-  try {
-    if (!navigator.onLine) throw new Error("offline");
-    const behavior = getItemFlowBehavior(item.type);
-    const placeError = await behavior.placeAtLocation({
-      state,
-      virtual,
-      item,
-      getPlacementAccuracyMeters,
-      editedName,
-      editedText,
-      editedUrl,
-    });
-    if (placeError) {
-      notify(placeError, "error");
-      return;
-    }
-  } catch (err) {
-    notify(parseErrorMessage(err) || "Could not place inventory item. Try again when online.", "error", 3200);
-    return;
-  }
+  const success = await ItemActions.placeItemAtLocation(item, editedName, editedText, editedUrl);
+  if (!success) return;
 
   if (item.inventorySource === "favorite") {
-    removePortalFavoriteById(item.portalId);
-    renderPortalModal();
+    ItemActions.removeFavoritePortal(item.portalId);
   } else {
     removeFromInventory(item.id);
   }
   const virtual2 = getVirtualPosition();
   if (virtual2) await loadNearby(virtual2.lat, virtual2.lng, false);
+  if (itemsModalEl?.classList.contains("is-open")) {
+    renderNearbyItemList();
+  }
   renderInventory();
 }
 
@@ -5771,9 +5906,13 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
         return;
       }
 
+      // Edit the item at the effective actor position (virtual when teleported,
+      // physical otherwise) so the server proximity check matches the location
+      // whose items are actually displayed.
+      const actor = getEffectiveActorPosition();
       const form = new FormData();
-      form.append("actor_latitude", String(state.physicalPosition.lat));
-      form.append("actor_longitude", String(state.physicalPosition.lng));
+      form.append("actor_latitude", String(actor.lat));
+      form.append("actor_longitude", String(actor.lng));
       form.append("content_name", name);
       if (!name) form.append("content_name_clear", "true");
       form.append("content_text", text);
@@ -5908,27 +6047,51 @@ itemAddFormEl?.addEventListener("submit", async (event) => {
       return;
     }
 
-    try {
-      const placeError = await behavior.placeAtLocation({
-        state,
-        virtual,
-        item: draftItem,
-        getPlacementAccuracyMeters,
-      });
-      if (placeError) {
-        notify(placeError, "error");
-        return;
-      }
-    } catch {
-      notify("Could not add location item. Try again.", "error");
+    const placedSuccessfully = await ItemActions.placeItemAtLocation(draftItem);
+    if (!placedSuccessfully) {
       return;
     }
 
-    await loadNearby(virtual.lat, virtual.lng, false);
     notify("Item added at this location.", "success", 2000);
   }
 
   closeModal(itemAddModalEl);
+});
+
+// ── Modal Event Listeners ──────────────────────────────────────────────────────
+
+itemEventEmitter.on("itemPlaced", ({ item }) => {
+  if (itemsModalEl?.classList.contains("is-open")) {
+    renderNearbyItemList();
+  }
+  renderInventory();
+});
+
+itemEventEmitter.on("itemRemovedFromWorld", ({ item }) => {
+  if (itemsModalEl?.classList.contains("is-open")) {
+    renderNearbyItemList();
+  }
+});
+
+itemEventEmitter.on("itemRemovedFromInventory", ({ item }) => {
+  renderInventory();
+});
+
+itemEventEmitter.on("itemPickedUpFromWorld", ({ item }) => {
+  if (itemsModalEl?.classList.contains("is-open")) {
+    renderNearbyItemList();
+  }
+  renderInventory();
+});
+
+itemEventEmitter.on("portalItemRemoved", ({ item }) => {
+  if (itemsModalEl?.classList.contains("is-open")) {
+    renderNearbyItemList();
+  }
+});
+
+itemEventEmitter.on("favoritePortalRemoved", ({ portalId }) => {
+  renderPortalModal();
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

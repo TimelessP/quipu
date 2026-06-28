@@ -216,6 +216,7 @@
           <div class="settings-modal-actions">
             <button id="settings-theme-cycle" type="button">Cycle Theme</button>
             <button id="settings-follow-player" type="button">Center On Player</button>
+            <button id="settings-delete-local-data" type="button" style="color: #d9534f;">Delete Local Data</button>
           </div>
         </div>
       </section>
@@ -350,6 +351,9 @@
     <script nonce="__CSP_NONCE__" data-cfasync="false" src="/static/vendor/leaflet/leaflet.js?v=__ASSET_VERSION__"></script>
     <script nonce="__CSP_NONCE__" data-cfasync="false" src="/static/vendor/h3/h3-js.umd.js?v=__ASSET_VERSION__"></script>
     <script nonce="__CSP_NONCE__" data-cfasync="false" src="/static/vendor/qrcode/qrcode.min.js?v=__ASSET_VERSION__"></script>
+    <script nonce="__CSP_NONCE__" data-cfasync="false">
+      window.QUIPU_ASSET_VERSION = "__ASSET_VERSION__";
+    </script>
     <script nonce="__CSP_NONCE__" data-cfasync="false" src="/static/app.js?v=__ASSET_VERSION__" type="module" crossorigin="anonymous"></script>
   </body>
 </html>
