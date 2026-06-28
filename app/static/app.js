@@ -4950,8 +4950,29 @@ async function loadViewportPortals(preferCache = true) {
   const cachedEntry = cachePeekEntry(viewportKey);
   const cached = cachedEntry?.value || null;
   const cacheAgeMs = cachedEntry ? getCacheAgeMs(viewportKey) : null;
-  const cacheIsFresh = cached && cacheAgeMs !== null && cacheAgeMs <= PORTAL_CACHE_TTL_MS;
   const cacheOrigin = getVirtualPosition() || state.physicalPosition || { lat: center.lat, lng: center.lng };
+
+  // Viewport cache freshness uses distance-aware TTL based on minimum distance to any cell
+  // This ensures that panning to a nearby area keeps cached data fresh, even if actor is far away
+  let viewportCacheTtlMs = PORTAL_CACHE_TTL_MS;
+  try {
+    const distances = [];
+    for (const cellId of cells) {
+      const [cellLat, cellLng] = h3Api.cellToLatLng(cellId);
+      if (Number.isFinite(cellLat) && Number.isFinite(cellLng)) {
+        distances.push(haversineMeters(cacheOrigin.lat, cacheOrigin.lng, cellLat, cellLng));
+      }
+    }
+    if (distances.length > 0) {
+      const minDistance = Math.min(...distances);
+      const walkTimeMs = Math.max(0, (minDistance / WALK_SPEED_MPS) * 1000);
+      viewportCacheTtlMs = PORTAL_CACHE_TTL_MS + walkTimeMs;
+    }
+  } catch {
+    // fallback to static TTL on error
+  }
+
+  const cacheIsFresh = cached && cacheAgeMs !== null && cacheAgeMs <= viewportCacheTtlMs;
 
   if (cacheIsFresh) {
     state.viewportPortalItems = cached.items || [];
