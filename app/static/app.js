@@ -55,6 +55,7 @@ const state = {
   selectedLocalPortalPos: null,
   selectedRemotePortalPos: null,
   inventory: [],
+  portalFavorites: [],
   visitCounterViewedIds: new Set(),
 };
 
@@ -98,6 +99,245 @@ async function apiFetch(url, options = {}) {
     return Promise.reject(new Error("Session expired"));
   }
   return response;
+}
+
+// ── IndexedDB Storage ──────────────────────────────────────────────────────────
+
+const DB_NAME = "quipu";
+const DB_VERSION = 2;
+const STORES = { inventory: "inventory", portalFavorites: "portalFavorites" };
+
+let dbInstance = null;
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    if (dbInstance) {
+      resolve(dbInstance);
+      return;
+    }
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      dbInstance = request.result;
+      resolve(dbInstance);
+    };
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(STORES.inventory)) {
+        const inventory = db.createObjectStore(STORES.inventory, { keyPath: "id" });
+        inventory.createIndex("type", "type");
+        inventory.createIndex("owner", "owner");
+        inventory.createIndex("placement_timestamp", "placement_timestamp");
+      }
+      if (!db.objectStoreNames.contains(STORES.portalFavorites)) {
+        const favorites = db.createObjectStore(STORES.portalFavorites, { keyPath: "id" });
+        favorites.createIndex("latitude", "latitude");
+        favorites.createIndex("longitude", "longitude");
+      }
+    };
+  });
+}
+
+async function dbGet(storeName, key) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const request = tx.objectStore(storeName).get(key);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function dbGetAll(storeName) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const request = tx.objectStore(storeName).getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result || []);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function dbPut(storeName, value) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      const request = tx.objectStore(storeName).put(value);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+  } catch (err) {
+    console.error(`[IndexedDB] Failed to put in ${storeName}:`, err);
+    throw err;
+  }
+}
+
+async function dbDelete(storeName, key) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      const request = tx.objectStore(storeName).delete(key);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  } catch (err) {
+    console.error(`[IndexedDB] Failed to delete from ${storeName}:`, err);
+  }
+}
+
+async function dbClear(storeName) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      const request = tx.objectStore(storeName).clear();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  } catch (err) {
+    console.error(`[IndexedDB] Failed to clear ${storeName}:`, err);
+  }
+}
+
+// ── Data Export/Import ─────────────────────────────────────────────────────────
+
+async function exportDataAsJson() {
+  try {
+    const inventory = await dbGetAll(STORES.inventory);
+    const portalFavorites = await dbGetAll(STORES.portalFavorites);
+
+    const exportData = {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      inventory: inventory || [],
+      portalFavorites: portalFavorites || [],
+    };
+
+    // Try to fetch and inline images as base64
+    for (const item of exportData.inventory) {
+      if (item.content_upload_path && !item.content_data_url) {
+        try {
+          const resp = await fetch(item.content_upload_path);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const reader = new FileReader();
+            await new Promise((resolve, reject) => {
+              reader.onload = () => {
+                item.content_data_url = reader.result;
+                resolve();
+              };
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(blob);
+            });
+          }
+        } catch (err) {
+          console.warn(`[Export] Could not fetch image ${item.content_upload_path}:`, err);
+        }
+      }
+    }
+
+    for (const fav of exportData.portalFavorites) {
+      if (fav.content_upload_path && !fav.content_data_url) {
+        try {
+          const resp = await fetch(fav.content_upload_path);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const reader = new FileReader();
+            await new Promise((resolve, reject) => {
+              reader.onload = () => {
+                fav.content_data_url = reader.result;
+                resolve();
+              };
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(blob);
+            });
+          }
+        } catch (err) {
+          console.warn(`[Export] Could not fetch image ${fav.content_upload_path}:`, err);
+        }
+      }
+    }
+
+    const jsonString = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `quipu-backup-${new Date().toISOString().split("T")[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    notify("Data exported successfully.", "success", 2000);
+  } catch (err) {
+    console.error("[Export] Failed:", err);
+    notify("Export failed: " + (err.message || "unknown error"), "error", 3000);
+  }
+}
+
+async function importDataFromJson(file) {
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+
+    if (!data.inventory || !Array.isArray(data.inventory)) {
+      throw new Error("Invalid backup file: missing inventory array");
+    }
+
+    // Validate total size (rough limit: 50MB)
+    const totalSize = file.size;
+    if (totalSize > 50 * 1024 * 1024) {
+      throw new Error("Backup file too large (>50MB)");
+    }
+
+    // Clear existing data and import
+    await dbClear(STORES.inventory);
+    if (data.portalFavorites && Array.isArray(data.portalFavorites)) {
+      await dbClear(STORES.portalFavorites);
+    }
+
+    // Import inventory
+    for (const item of data.inventory || []) {
+      if (!item.id) continue;
+      try {
+        await dbPut(STORES.inventory, normalizeInventoryItem(item));
+      } catch (err) {
+        console.warn("[Import] Could not import item:", item.id, err);
+      }
+    }
+
+    // Import favorites
+    for (const fav of data.portalFavorites || []) {
+      if (!fav.id) continue;
+      try {
+        await dbPut(STORES.portalFavorites, normalizePortalFavorite(fav));
+      } catch (err) {
+        console.warn("[Import] Could not import favorite:", fav.id, err);
+      }
+    }
+
+    // Reload into state
+    state.inventory = await loadInventoryFromIndexedDB();
+    state.portalFavorites = await loadPortalFavoritesFromIndexedDB();
+    renderInventory();
+    renderPortalModal();
+
+    notify("Data imported successfully. Refresh to see all changes.", "success", 2500);
+  } catch (err) {
+    console.error("[Import] Failed:", err);
+    notify("Import failed: " + (err.message || "unknown error"), "error", 3000);
+  }
 }
 
 // ── EventEmitter ──────────────────────────────────────────────────────────────
@@ -326,21 +566,47 @@ const PORTAL_REMOVE_RANGE_METERS = PORTAL_INTERACTION_RANGE_METERS;
 const SHARED_PORTAL_LAT_PARAM = "portal_lat";
 const SHARED_PORTAL_LNG_PARAM = "portal_lng";
 const inventoryKey = "quipuInventoryV2";
-
-// Restore persisted inventory
-const _savedInventory = localStorage.getItem(inventoryKey);
-if (_savedInventory) {
-  try { state.inventory = JSON.parse(_savedInventory).map((item) => normalizeInventoryItem(item)); } catch { state.inventory = []; }
-}
-
-localStorage.setItem("quipuOwnerId", state.ownerId);
-
 const cacheKey = "quipuNearbyCacheV1";
 const customLocCKey = "quipuGpsLocC";
 const themeChoiceKey = "quipuThemeChoiceV1";
 const portalFavoritesKey = "quipuPortalFavoritesV1";
 const clientStateKey = "quipuClientStateV1";
 const followRepairKey = "quipuFollowRepairV1";
+
+localStorage.setItem("quipuOwnerId", state.ownerId);
+
+async function loadInventoryFromIndexedDB() {
+  try {
+    const items = await dbGetAll(STORES.inventory);
+    return items.map((item) => normalizeInventoryItem(item));
+  } catch (err) {
+    console.error("[Storage] Failed to load inventory from IndexedDB:", err);
+    // Fallback to localStorage for backward compatibility
+    const _savedInventory = localStorage.getItem(inventoryKey);
+    if (_savedInventory) {
+      try {
+        return JSON.parse(_savedInventory).map((item) => normalizeInventoryItem(item));
+      } catch { }
+    }
+    return [];
+  }
+}
+
+async function loadPortalFavoritesFromIndexedDB() {
+  try {
+    return await dbGetAll(STORES.portalFavorites);
+  } catch (err) {
+    console.error("[Storage] Failed to load favorites from IndexedDB:", err);
+    // Fallback to localStorage
+    const raw = localStorage.getItem(portalFavoritesKey);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((f) => Number.isFinite(f?.latitude) && Number.isFinite(f?.longitude)) : [];
+    } catch { }
+    return [];
+  }
+}
 
 hydrateClientState();
 
@@ -413,6 +679,9 @@ const imageViewerStageEl = document.getElementById("image-viewer-stage");
 const imageViewerImageEl = document.getElementById("image-viewer-image");
 const settingsThemeCycleButtonEl = document.getElementById("settings-theme-cycle");
 const settingsFollowPlayerButtonEl = document.getElementById("settings-follow-player");
+const settingsExportDataButtonEl = document.getElementById("settings-export-data");
+const settingsImportDataButtonEl = document.getElementById("settings-import-data");
+const settingsImportFileEl = document.getElementById("settings-import-file");
 const settingsDeleteLocalDataButtonEl = document.getElementById("settings-delete-local-data");
 const portalNameInputEl = document.getElementById("portal-name-input");
 const portalContentTextEl = document.getElementById("portal-content-text");
@@ -1754,31 +2023,26 @@ function makeThumbnailOpenable(imageEl, src, title) {
 }
 
 function loadPortalFavorites() {
-  const raw = localStorage.getItem(portalFavoritesKey);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((f) => Number.isFinite(f?.latitude) && Number.isFinite(f?.longitude))
-      .map((favorite) => normalizePortalFavorite(favorite));
-  } catch {
-    return [];
-  }
+  return state.portalFavorites || [];
 }
 
 function savePortalFavorites(favorites) {
   const normalized = favorites.map((favorite) => normalizePortalFavorite(favorite));
-  try {
-    localStorage.setItem(portalFavoritesKey, JSON.stringify(normalized));
-  } catch (error) {
-    const isQuota = error instanceof DOMException && error.name === "QuotaExceededError";
-    if (!isQuota) throw error;
+  state.portalFavorites = normalized;
+  // Async save to IndexedDB in background (don't block UI)
+  savePortalFavoritesAsync(normalized).catch((err) => {
+    console.error("[Storage] Failed to save favorites:", err);
+  });
+}
 
-    // Keep favourite metadata and upload paths, but drop large inline data URLs.
-    const compacted = normalized.map((favorite) => ({ ...favorite, content_data_url: null }));
-    localStorage.setItem(portalFavoritesKey, JSON.stringify(compacted));
-    notify("Stored favourites without embedded image blobs to avoid browser storage limit.", "info", 3000);
+async function savePortalFavoritesAsync(favorites) {
+  try {
+    for (const fav of favorites) {
+      await dbPut(STORES.portalFavorites, fav);
+    }
+  } catch (err) {
+    console.error("[Storage] Failed to save favorites to IndexedDB:", err);
+    notify("Could not save favorites to browser storage.", "error", 2000);
   }
 }
 
@@ -1837,9 +2101,8 @@ function normalizeInventoryItem(item) {
 
 function removePortalFavoriteById(portalId) {
   if (typeof portalId !== "string" || !portalId) return false;
-  const favorites = loadPortalFavorites();
-  const nextFavorites = favorites.filter((favorite) => favorite.id !== portalId);
-  if (nextFavorites.length === favorites.length) return false;
+  const nextFavorites = state.portalFavorites.filter((favorite) => favorite.id !== portalId);
+  if (nextFavorites.length === state.portalFavorites.length) return false;
   savePortalFavorites(nextFavorites);
   return true;
 }
@@ -5678,6 +5941,32 @@ settingsFollowPlayerButtonEl?.addEventListener("click", () => {
   updateFollowIndicator();
   centerMapOnPlayerVirtual(true);
 });
+settingsExportDataButtonEl?.addEventListener("click", async () => {
+  settingsExportDataButtonEl.disabled = true;
+  settingsExportDataButtonEl.textContent = "Exporting...";
+  try {
+    await exportDataAsJson();
+  } finally {
+    settingsExportDataButtonEl.disabled = false;
+    settingsExportDataButtonEl.textContent = "Export Data as JSON";
+  }
+});
+settingsImportDataButtonEl?.addEventListener("click", () => {
+  settingsImportFileEl?.click();
+});
+settingsImportFileEl?.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  settingsImportDataButtonEl.disabled = true;
+  settingsImportDataButtonEl.textContent = "Importing...";
+  try {
+    await importDataFromJson(file);
+  } finally {
+    settingsImportDataButtonEl.disabled = false;
+    settingsImportDataButtonEl.textContent = "Import Data from JSON";
+    event.target.value = "";
+  }
+});
 settingsDeleteLocalDataButtonEl?.addEventListener("click", () => {
   if (!confirm("Delete all local data (inventory, favorites, cache)? This cannot be undone.")) {
     return;
@@ -5690,8 +5979,14 @@ settingsDeleteLocalDataButtonEl?.addEventListener("click", () => {
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
 
-function saveInventory() {
-  localStorage.setItem(inventoryKey, JSON.stringify(state.inventory.map((item) => normalizeInventoryItem(item))));
+async function saveInventory() {
+  try {
+    for (const item of state.inventory) {
+      await dbPut(STORES.inventory, normalizeInventoryItem(item));
+    }
+  } catch (err) {
+    console.error("[Storage] Failed to save inventory to IndexedDB:", err);
+  }
 }
 
 async function deleteLocationItem(item) {
@@ -6097,6 +6392,10 @@ itemEventEmitter.on("favoritePortalRemoved", ({ portalId }) => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function boot() {
+  // Load inventory and favorites from IndexedDB
+  state.inventory = await loadInventoryFromIndexedDB();
+  state.portalFavorites = await loadPortalFavoritesFromIndexedDB();
+
   repairFollowStateAfterSharedPortalRegression();
   initThemeMode();
   setNetworkStatus();

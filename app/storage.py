@@ -46,8 +46,14 @@ class FileStorage:
     def _read_json(self, path: Path) -> dict[str, Any] | None:
         if not path.exists():
             return None
-        with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            # File is corrupted. Log and treat as missing; it will be recreated on next write.
+            import sys
+            print(f"WARNING: Corrupted JSON file {path}: {e}", file=sys.stderr)
+            return None
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
         temp_path = path.with_suffix(path.suffix + ".tmp")
