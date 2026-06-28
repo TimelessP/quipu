@@ -38,7 +38,7 @@ from typing import cast
 import app.storage as storage_module
 
 app = FastAPI(title="Quipu MVP", version="0.1.2", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
-ASSET_VERSION = "20260627-00"
+ASSET_VERSION = "20260628-08"
 app.include_router(google_router)
 
 app.add_middleware(
@@ -549,7 +549,12 @@ async def update_world_item_content(
     if item.type not in {ItemType.MEDIA, ItemType.FAVORITE_PORTAL_ITEM}:
         raise HTTPException(status_code=400, detail="Only media/favourite world items can be edited in place")
 
-    distance = haversine_meters(actor_latitude, actor_longitude, item.latitude, item.longitude)
+    distance_to_item = haversine_meters(actor_latitude, actor_longitude, item.latitude, item.longitude)
+    distance = distance_to_item
+    if isinstance(item, FavoritePortalItemDocument) and item.favorite_portal_latitude is not None:
+        distance_to_portal = haversine_meters(actor_latitude, actor_longitude, item.favorite_portal_latitude, item.favorite_portal_longitude)
+        distance = min(distance_to_item, distance_to_portal)
+
     if distance > AREA_OF_EFFECT_RADIUS_METERS:
         raise HTTPException(
             status_code=400,
