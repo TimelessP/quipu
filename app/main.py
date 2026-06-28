@@ -551,7 +551,7 @@ async def update_world_item_content(
 
     distance_to_item = haversine_meters(actor_latitude, actor_longitude, item.latitude, item.longitude)
     distance = distance_to_item
-    if isinstance(item, FavoritePortalItemDocument) and item.favorite_portal_latitude is not None:
+    if isinstance(item, FavoritePortalItemDocument) and item.favorite_portal_latitude is not None and item.favorite_portal_longitude is not None:
         distance_to_portal = haversine_meters(actor_latitude, actor_longitude, item.favorite_portal_latitude, item.favorite_portal_longitude)
         distance = min(distance_to_item, distance_to_portal)
 
