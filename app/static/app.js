@@ -576,36 +576,12 @@ const followRepairKey = "quipuFollowRepairV1";
 localStorage.setItem("quipuOwnerId", state.ownerId);
 
 async function loadInventoryFromIndexedDB() {
-  try {
-    const items = await dbGetAll(STORES.inventory);
-    return items.map((item) => normalizeInventoryItem(item));
-  } catch (err) {
-    console.error("[Storage] Failed to load inventory from IndexedDB:", err);
-    // Fallback to localStorage for backward compatibility
-    const _savedInventory = localStorage.getItem(inventoryKey);
-    if (_savedInventory) {
-      try {
-        return JSON.parse(_savedInventory).map((item) => normalizeInventoryItem(item));
-      } catch { }
-    }
-    return [];
-  }
+  const items = await dbGetAll(STORES.inventory);
+  return items.map((item) => normalizeInventoryItem(item));
 }
 
 async function loadPortalFavoritesFromIndexedDB() {
-  try {
-    return await dbGetAll(STORES.portalFavorites);
-  } catch (err) {
-    console.error("[Storage] Failed to load favorites from IndexedDB:", err);
-    // Fallback to localStorage
-    const raw = localStorage.getItem(portalFavoritesKey);
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter((f) => Number.isFinite(f?.latitude) && Number.isFinite(f?.longitude)) : [];
-    } catch { }
-    return [];
-  }
+  return await dbGetAll(STORES.portalFavorites);
 }
 
 hydrateClientState();
@@ -5988,14 +5964,20 @@ settingsImportFileEl?.addEventListener("change", async (event) => {
     event.target.value = "";
   }
 });
-settingsDeleteLocalDataButtonEl?.addEventListener("click", () => {
+settingsDeleteLocalDataButtonEl?.addEventListener("click", async () => {
   if (!confirm("Delete all local data (inventory, favorites, cache)? This cannot be undone.")) {
     return;
   }
-  localStorage.clear();
-  notify("Local data deleted. Refresh the page to start fresh.", "success", 3000);
-  // Optionally reload the page after a delay
-  setTimeout(() => window.location.reload(), 1500);
+  try {
+    await dbClear(STORES.inventory);
+    await dbClear(STORES.portalFavorites);
+    localStorage.clear();
+    notify("Local data deleted. Refresh the page to start fresh.", "success", 3000);
+    setTimeout(() => window.location.reload(), 1500);
+  } catch (err) {
+    console.error("Error clearing data:", err);
+    notify("Could not clear all data. Please try again.", "error", 2000);
+  }
 });
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
