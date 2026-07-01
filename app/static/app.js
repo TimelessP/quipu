@@ -2240,7 +2240,9 @@ function openLockboxMetadataEditor(entry, source = "inventory") {
   lockboxEditImageClearRequested = false;
   lockboxEditCurrentImage = entry.box_image_upload_path ? `/uploads/${entry.box_image_upload_path}` : (entry.box_image || null);
   if (itemAddBoxImageFileEl) itemAddBoxImageFileEl.value = "";
-  setBoxImageEditControls(true);
+  // Only show file upload controls for world items (location), not for inventory
+  const isWorldItem = source === "location";
+  setBoxImageEditControls(isWorldItem);
   updateBoxImagePreview();
 
   setItemFormMode("edit", entry, source);
@@ -2309,27 +2311,25 @@ async function submitLockboxMetadataEdit(target) {
     return;
   }
 
-  // Handle box image: file upload for new files, data URL for existing (inventory),
-  // null for clear, undefined for no change
+  // Handle box image: file upload for world items only, data URL for inventory (to avoid flickering)
   const boxImageFile = itemAddBoxImageFileEl?.files?.[0] || null;
   let nextBoxImage;
-  if (boxImageFile) {
-    if (itemEditSource === "location") {
-      // For world items, we'll send as file upload
+  if (itemEditSource === "location") {
+    // For world items, we'll send as file upload
+    if (boxImageFile) {
       nextBoxImage = { file: boxImageFile };
+    } else if (lockboxEditImageClearRequested) {
+      nextBoxImage = null;
     } else {
-      // For inventory items, convert to data URL
-      try {
-        nextBoxImage = await fileToDataUrl(boxImageFile);
-      } catch (err) {
-        notify("Could not read the selected image.", "error", 2600);
-        return;
-      }
+      nextBoxImage = undefined;
     }
-  } else if (lockboxEditImageClearRequested) {
-    nextBoxImage = null;
   } else {
-    nextBoxImage = undefined;
+    // For inventory items, only support clearing image (no file uploads to avoid large data URLs)
+    if (lockboxEditImageClearRequested) {
+      nextBoxImage = null;
+    } else {
+      nextBoxImage = undefined;
+    }
   }
 
   if (itemEditSource === "location") {
