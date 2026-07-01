@@ -37,8 +37,8 @@ from app.spatial import haversine_meters
 from typing import cast
 import app.storage as storage_module
 
-app = FastAPI(title="Quipu MVP", version="0.1.3", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
-ASSET_VERSION = "20260628-14"
+app = FastAPI(title="Quipu MVP", version="0.1.9", max_upload_size=20 * 1024 * 1024)  # Set limit to 20MB
+ASSET_VERSION = "20260628-20"
 app.include_router(google_router)
 
 app.add_middleware(

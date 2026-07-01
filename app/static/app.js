@@ -104,8 +104,8 @@ async function apiFetch(url, options = {}) {
 // ── IndexedDB Storage ──────────────────────────────────────────────────────────
 
 const DB_NAME = "quipu";
-const DB_VERSION = 2;
-const STORES = { inventory: "inventory", portalFavorites: "portalFavorites" };
+const DB_VERSION = 3;
+const STORES = { inventory: "inventory", portalFavorites: "portalFavorites", nearbyCache: "nearbyCache" };
 
 let dbInstance = null;
 
@@ -133,6 +133,9 @@ function openDatabase() {
         const favorites = db.createObjectStore(STORES.portalFavorites, { keyPath: "id" });
         favorites.createIndex("latitude", "latitude");
         favorites.createIndex("longitude", "longitude");
+      }
+      if (!db.objectStoreNames.contains(STORES.nearbyCache)) {
+        db.createObjectStore(STORES.nearbyCache, { keyPath: "cacheKey" });
       }
     };
   });
@@ -418,6 +421,7 @@ const ItemActions = {
       return false;
     }
 
+    invalidateItemCache(item.id);
     const virtual = getVirtualPosition();
     if (virtual) await loadNearby(virtual.lat, virtual.lng, false);
     notify("Item deleted.", "success", 2000);
@@ -1700,9 +1704,9 @@ function getLockboxEntryDetailLines(entry) {
 }
 
 function getLockboxEntryThumb(entry) {
-  if (entry.content_upload_path) return `/uploads/${entry.content_upload_path}`;
+  if (entry.content_upload_path) return entry.content_upload_path;
   if (entry.content_data_url) return entry.content_data_url;
-  if (entry.box_image_upload_path) return `/uploads/${entry.box_image_upload_path}`;
+  if (entry.box_image_upload_path) return entry.box_image_upload_path;
   if (entry.box_image) return entry.box_image;
   return "";
 }
@@ -2238,11 +2242,13 @@ function openLockboxMetadataEditor(entry, source = "inventory") {
   if (itemAddBoxUrlEl) itemAddBoxUrlEl.value = entry.box_url || "";
 
   lockboxEditImageClearRequested = false;
-  lockboxEditCurrentImage = entry.box_image_upload_path ? `/uploads/${entry.box_image_upload_path}` : (entry.box_image || null);
+  lockboxEditCurrentImage = entry.box_image_upload_path || entry.box_image || null;
   if (itemAddBoxImageFileEl) itemAddBoxImageFileEl.value = "";
-  // Only show file upload controls for world items (location), not for inventory
+  // Always show file upload controls for both world and inventory items
+  setBoxImageEditControls(true);
+  // Hide the URL input field for inventory items (they use files, not URLs)
   const isWorldItem = source === "location";
-  setBoxImageEditControls(isWorldItem);
+  if (itemAddBoxImageUrlLabelEl) itemAddBoxImageUrlLabelEl.hidden = !isWorldItem;
   updateBoxImagePreview();
 
   setItemFormMode("edit", entry, source);
@@ -2311,25 +2317,26 @@ async function submitLockboxMetadataEdit(target) {
     return;
   }
 
-  // Handle box image: file upload for world items only, data URL for inventory (to avoid flickering)
+  // Handle box image: file upload for world items, data URL for inventory items
   const boxImageFile = itemAddBoxImageFileEl?.files?.[0] || null;
   let nextBoxImage;
-  if (itemEditSource === "location") {
-    // For world items, we'll send as file upload
-    if (boxImageFile) {
+  if (boxImageFile) {
+    if (itemEditSource === "location") {
+      // For world items, send as file upload
       nextBoxImage = { file: boxImageFile };
-    } else if (lockboxEditImageClearRequested) {
-      nextBoxImage = null;
     } else {
-      nextBoxImage = undefined;
+      // For inventory items, convert to data URL
+      try {
+        nextBoxImage = await fileToDataUrl(boxImageFile);
+      } catch (err) {
+        notify("Could not read the selected image.", "error", 2600);
+        return;
+      }
     }
+  } else if (lockboxEditImageClearRequested) {
+    nextBoxImage = null;
   } else {
-    // For inventory items, only support clearing image (no file uploads to avoid large data URLs)
-    if (lockboxEditImageClearRequested) {
-      nextBoxImage = null;
-    } else {
-      nextBoxImage = undefined;
-    }
+    nextBoxImage = undefined;
   }
 
   if (itemEditSource === "location") {
@@ -2362,6 +2369,7 @@ async function submitLockboxMetadataEdit(target) {
       form.append("box_url_clear", "true");
     }
 
+    let updatedItem;
     try {
       const response = await apiFetch(`/api/dimensions/${state.dimensionRootId}/items/${target.id}/lockbox`, {
         method: "PATCH",
@@ -2370,10 +2378,14 @@ async function submitLockboxMetadataEdit(target) {
       if (!response.ok) {
         throw new Error(await response.text());
       }
+      updatedItem = await response.json();
     } catch (err) {
       notify(parseErrorMessage(err) || "Could not update lock box.", "error", 3200);
       return;
     }
+
+    // Invalidate cache for the updated item so loadNearby fetches fresh data
+    invalidateItemCache(target.id);
 
     const virtual = getVirtualPosition();
     if (virtual) {
@@ -2513,7 +2525,7 @@ const ITEM_CARD_RENDERERS = {
     locationBodyHtml: (item) => {
       const parts = [];
       if (item.box_description) parts.push(`<div class="item-content-text">${escapeHtml(item.box_description)}</div>`);
-      const imageSrc = item.box_image_upload_path ? `/uploads/${item.box_image_upload_path}` : item.box_image;
+      const imageSrc = item.box_image_upload_path || item.box_image;
       if (imageSrc) parts.push(`<img class="item-photo" src="${escapeHtml(imageSrc)}" alt="box image" />`);
       const safeBoxUrl = sanitizeExternalHttpUrl(item.box_url);
       if (safeBoxUrl) {
@@ -3387,51 +3399,91 @@ function updatePortalOffsetFromSelection(options = {}) {
   return true;
 }
 
-function cacheRead(key) {
-  const raw = localStorage.getItem(cacheKey);
-  if (!raw) return null;
-  const data = JSON.parse(raw);
-  const entry = data[key];
-  if (!entry) return null;
-  entry.touched = Date.now();
-  data[key] = entry;
-  localStorage.setItem(cacheKey, JSON.stringify(data));
-  return entry.value;
-}
-
-function cachePeekEntry(key) {
-  const raw = localStorage.getItem(cacheKey);
-  if (!raw) return null;
-  const data = JSON.parse(raw);
-  return data[key] || null;
-}
-
-function cacheTouch(key) {
-  const raw = localStorage.getItem(cacheKey);
-  if (!raw) return null;
-  const data = JSON.parse(raw);
-  const entry = data[key];
-  if (!entry) return null;
-  entry.touched = Date.now();
-  data[key] = entry;
-  localStorage.setItem(cacheKey, JSON.stringify(data));
-  return entry.value;
-}
-
-function cacheWrite(key, value) {
-  const raw = localStorage.getItem(cacheKey);
-  const data = raw ? JSON.parse(raw) : {};
-  data[key] = { touched: Date.now(), value };
-
-  const keys = Object.keys(data);
-  if (keys.length > 50) {
-    keys
-      .sort((a, b) => data[a].touched - data[b].touched)
-      .slice(0, keys.length - 50)
-      .forEach((k) => delete data[k]);
+async function cacheRead(key) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORES.nearbyCache, "readwrite");
+      const store = tx.objectStore(STORES.nearbyCache);
+      const getRequest = store.get(key);
+      getRequest.onsuccess = () => {
+        const entry = getRequest.result;
+        if (entry) {
+          entry.touched = Date.now();
+          store.put(entry);
+          resolve(entry.value);
+        } else {
+          resolve(null);
+        }
+      };
+      getRequest.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
   }
+}
 
-  localStorage.setItem(cacheKey, JSON.stringify(data));
+async function cachePeekEntry(key) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORES.nearbyCache, "readonly");
+      const request = tx.objectStore(STORES.nearbyCache).get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function cacheTouch(key) {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORES.nearbyCache, "readwrite");
+      const store = tx.objectStore(STORES.nearbyCache);
+      const getRequest = store.get(key);
+      getRequest.onsuccess = () => {
+        const entry = getRequest.result;
+        if (entry) {
+          entry.touched = Date.now();
+          store.put(entry);
+          resolve(entry.value);
+        } else {
+          resolve(null);
+        }
+      };
+      getRequest.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function cacheWrite(key, value) {
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction(STORES.nearbyCache, "readwrite");
+    const store = tx.objectStore(STORES.nearbyCache);
+
+    // Store the entry
+    store.put({ cacheKey: key, touched: Date.now(), value });
+
+    // Cleanup: remove oldest entries if more than 100 cached
+    const getAllRequest = store.getAll();
+    getAllRequest.onsuccess = () => {
+      const entries = getAllRequest.result;
+      if (entries.length > 100) {
+        entries
+          .sort((a, b) => a.touched - b.touched)
+          .slice(0, entries.length - 100)
+          .forEach((entry) => store.delete(entry.cacheKey));
+      }
+    };
+  } catch (err) {
+    console.warn("Failed to write cache:", err);
+  }
 }
 
 function invalidateItemCache(itemId) {
@@ -3475,8 +3527,8 @@ function invalidatePortalCache(portalId) {
   invalidateItemCache(portalId);
 }
 
-function getCacheAgeMs(key) {
-  const entry = cachePeekEntry(key);
+async function getCacheAgeMs(key) {
+  const entry = await cachePeekEntry(key);
   if (!entry || !Number.isFinite(entry.touched)) return null;
   return Date.now() - entry.touched;
 }
@@ -3486,14 +3538,14 @@ async function fetchJsonWithCache(key, url, preferCache = true, options = null) 
 
   if (preferCache) {
     if (maxAgeMs === null) {
-      const cached = cacheRead(key);
+      const cached = await cacheRead(key);
       if (cached) return cached;
     } else {
-      const cachedEntry = cachePeekEntry(key);
+      const cachedEntry = await cachePeekEntry(key);
       const cachedValue = cachedEntry?.value;
-      const cacheAgeMs = cachedEntry ? getCacheAgeMs(key) : null;
+      const cacheAgeMs = cachedEntry ? await getCacheAgeMs(key) : null;
       if (cachedValue && cacheAgeMs !== null && cacheAgeMs <= maxAgeMs) {
-        cacheTouch(key);
+        await cacheTouch(key);
         return cachedValue;
       }
     }
@@ -3506,7 +3558,7 @@ async function fetchJsonWithCache(key, url, preferCache = true, options = null) 
     throw error;
   }
   const payload = await response.json();
-  cacheWrite(key, payload);
+  await cacheWrite(key, payload);
   return payload;
 }
 
@@ -4767,7 +4819,7 @@ async function loadNearby(lat, lng, preferCache = true) {
   // we don't flash stale data (which would be missing another player's just-placed item)
   // over a pending authoritative result.
   if (preferCache) {
-    const cached = cacheRead(nearbyKey);
+    const cached = await cacheRead(nearbyKey);
     if (cached) {
       if (loadNearbyFreshInFlight > 0) return;
       const h3Api = window.h3;
@@ -4842,7 +4894,7 @@ async function loadNearby(lat, lng, preferCache = true) {
     const nearbyItems = reconciledItems.filter(
       (item) => haversineMeters(lat, lng, item.latitude, item.longitude) <= maxRangeMeters
     );
-    cacheWrite(nearbyKey, { items: nearbyItems });
+    await cacheWrite(nearbyKey, { items: nearbyItems });
 
     state.nearbyItems = nearbyItems;
     for (const item of state.nearbyItems) {
@@ -4857,7 +4909,7 @@ async function loadNearby(lat, lng, preferCache = true) {
   } catch (err) {
     console.error("Failed to load nearby items", err);
     if (isSuperseded()) return;
-    const cached = cacheRead(nearbyKey);
+    const cached = await cacheRead(nearbyKey);
     if (cached) {
       state.nearbyItems = cached.items || [];
       for (const item of state.nearbyItems) {
@@ -4937,9 +4989,9 @@ async function loadViewportPortals(preferCache = true) {
 
   // Stable cache key for the whole viewport: sort cells so pan order doesn't create duplicates.
   const viewportKey = `${state.dimensionRootId}:vp:${viewportMode}:${cells.slice().sort().join(",")}`;
-  const cachedEntry = cachePeekEntry(viewportKey);
+  const cachedEntry = await cachePeekEntry(viewportKey);
   const cached = cachedEntry?.value || null;
-  const cacheAgeMs = cachedEntry ? getCacheAgeMs(viewportKey) : null;
+  const cacheAgeMs = cachedEntry ? await getCacheAgeMs(viewportKey) : null;
   const cacheOrigin = getVirtualPosition() || state.physicalPosition || { lat: center.lat, lng: center.lng };
 
   // Viewport cache freshness uses distance-aware TTL based on minimum distance to any cell
@@ -4966,7 +5018,7 @@ async function loadViewportPortals(preferCache = true) {
 
   if (cacheIsFresh) {
     state.viewportPortalItems = cached.items || [];
-    cacheTouch(viewportKey);
+    await cacheTouch(viewportKey);
     for (const item of state.viewportPortalItems) updatePortalItemsInState(item);
     state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
     renderMapItems();
@@ -5010,7 +5062,7 @@ async function loadViewportPortals(preferCache = true) {
       }
       return haversineMeters(center.lat, center.lng, item.latitude, item.longitude) <= viewportRadiusMeters;
     });
-    cacheWrite(viewportKey, { items: portalItems });
+    await cacheWrite(viewportKey, { items: portalItems });
 
     state.viewportPortalItems = portalItems;
     for (const item of state.viewportPortalItems) updatePortalItemsInState(item);
@@ -5021,10 +5073,11 @@ async function loadViewportPortals(preferCache = true) {
     drawPortalLink();
   } catch (err) {
     console.error("Failed to load viewport portals", err);
-    const fallback = cachePeekEntry(viewportKey)?.value || null;
+    const fallbackEntry = await cachePeekEntry(viewportKey);
+    const fallback = fallbackEntry?.value || null;
     if (fallback) {
       state.viewportPortalItems = fallback.items || [];
-      cacheTouch(viewportKey);
+      await cacheTouch(viewportKey);
       for (const item of state.viewportPortalItems) updatePortalItemsInState(item);
       state.displayItems = mergeDisplayItems(state.nearbyItems, state.viewportPortalItems, getLinkedPortalItems());
       renderMapItems();
@@ -6133,6 +6186,7 @@ function renderInventory() {
         li.appendChild(text);
       }
 
+      // Handle content URL (for media items)
       const safeInventoryUrl = sanitizeExternalHttpUrl(item.content_url);
       if (safeInventoryUrl) {
         const link = document.createElement("a");
@@ -6144,17 +6198,39 @@ function renderInventory() {
         li.appendChild(link);
       }
 
-      const imageSrc = item.content_upload_path || item.content_data_url;
-      if (imageSrc) {
+      // Display media item images
+      const mediaImageSrc = item.content_upload_path || item.content_data_url;
+      if (mediaImageSrc) {
         const img = document.createElement("img");
         img.className = "item-photo item-photo--inventory";
-        img.src = imageSrc;
+        img.src = mediaImageSrc;
         img.alt = "media";
         if (item.content_upload_path) {
           img.addEventListener("error", () => reconcileMissingItem(item.id), { once: true });
         }
-        makeThumbnailOpenable(img, imageSrc, getInventoryEntryTitle(item));
+        makeThumbnailOpenable(img, mediaImageSrc, getInventoryEntryTitle(item));
         li.appendChild(img);
+      }
+
+      // Display lockbox images
+      if (item.type === "lock_box") {
+        const boxDescription = item.box_description;
+        if (boxDescription) {
+          const desc = document.createElement("p");
+          desc.className = "item-content-text";
+          desc.textContent = boxDescription;
+          li.appendChild(desc);
+        }
+
+        const lockboxImageSrc = item.box_image_upload_path || item.box_image;
+        if (lockboxImageSrc) {
+          const img = document.createElement("img");
+          img.className = "item-photo item-photo--inventory";
+          img.src = lockboxImageSrc;
+          img.alt = "box image";
+          makeThumbnailOpenable(img, lockboxImageSrc, getInventoryEntryTitle(item));
+          li.appendChild(img);
+        }
       }
     }
 
