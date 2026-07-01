@@ -1700,7 +1700,11 @@ function getLockboxEntryDetailLines(entry) {
 }
 
 function getLockboxEntryThumb(entry) {
-  return entry.content_upload_path || entry.content_data_url || entry.box_image || "";
+  if (entry.content_upload_path) return `/uploads/${entry.content_upload_path}`;
+  if (entry.content_data_url) return entry.content_data_url;
+  if (entry.box_image_upload_path) return `/uploads/${entry.box_image_upload_path}`;
+  if (entry.box_image) return entry.box_image;
+  return "";
 }
 
 function renderLockboxColumn(listEl, entries, actionLabel, onAction, emptyNote) {
@@ -2070,6 +2074,7 @@ function normalizeInventoryItem(item) {
     box_name: normalizeOptionalText(item?.box_name),
     box_description: normalizeOptionalText(item?.box_description),
     box_image: normalizeOptionalUrl(item?.box_image),
+    box_image_upload_path: typeof item?.box_image_upload_path === "string" && item.box_image_upload_path ? item.box_image_upload_path : null,
     box_url: normalizeOptionalUrl(item?.box_url),
     encrypted_contents: typeof item?.encrypted_contents === "string" && item.encrypted_contents ? item.encrypted_contents : null,
   };
@@ -2233,7 +2238,7 @@ function openLockboxMetadataEditor(entry, source = "inventory") {
   if (itemAddBoxUrlEl) itemAddBoxUrlEl.value = entry.box_url || "";
 
   lockboxEditImageClearRequested = false;
-  lockboxEditCurrentImage = entry.box_image || null;
+  lockboxEditCurrentImage = entry.box_image_upload_path ? `/uploads/${entry.box_image_upload_path}` : (entry.box_image || null);
   if (itemAddBoxImageFileEl) itemAddBoxImageFileEl.value = "";
   setBoxImageEditControls(true);
   updateBoxImagePreview();
@@ -2304,16 +2309,22 @@ async function submitLockboxMetadataEdit(target) {
     return;
   }
 
-  // Resolve the next box image. undefined = leave unchanged, null = clear,
-  // string = new data URL from the selected file.
+  // Handle box image: file upload for new files, data URL for existing (inventory),
+  // null for clear, undefined for no change
   const boxImageFile = itemAddBoxImageFileEl?.files?.[0] || null;
   let nextBoxImage;
   if (boxImageFile) {
-    try {
-      nextBoxImage = await fileToDataUrl(boxImageFile);
-    } catch (err) {
-      notify("Could not read the selected image.", "error", 2600);
-      return;
+    if (itemEditSource === "location") {
+      // For world items, we'll send as file upload
+      nextBoxImage = { file: boxImageFile };
+    } else {
+      // For inventory items, convert to data URL
+      try {
+        nextBoxImage = await fileToDataUrl(boxImageFile);
+      } catch (err) {
+        notify("Could not read the selected image.", "error", 2600);
+        return;
+      }
     }
   } else if (lockboxEditImageClearRequested) {
     nextBoxImage = null;
@@ -2337,7 +2348,9 @@ async function submitLockboxMetadataEdit(target) {
     if (boxName) form.append("box_name", boxName);
     form.append("box_description", boxDescription);
     if (nextBoxImage !== undefined) {
-      if (nextBoxImage) {
+      if (nextBoxImage?.file) {
+        form.append("box_image_file", nextBoxImage.file);
+      } else if (nextBoxImage) {
         form.append("box_image", nextBoxImage);
       } else {
         form.append("box_image_clear", "true");
@@ -2500,7 +2513,8 @@ const ITEM_CARD_RENDERERS = {
     locationBodyHtml: (item) => {
       const parts = [];
       if (item.box_description) parts.push(`<div class="item-content-text">${escapeHtml(item.box_description)}</div>`);
-      if (item.box_image) parts.push(`<img class="item-photo" src="${escapeHtml(item.box_image)}" alt="box image" />`);
+      const imageSrc = item.box_image_upload_path ? `/uploads/${item.box_image_upload_path}` : item.box_image;
+      if (imageSrc) parts.push(`<img class="item-photo" src="${escapeHtml(imageSrc)}" alt="box image" />`);
       const safeBoxUrl = sanitizeExternalHttpUrl(item.box_url);
       if (safeBoxUrl) {
         parts.push(`<div class="item-content-url"><a href="${escapeHtml(safeBoxUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(safeBoxUrl)}</a></div>`);

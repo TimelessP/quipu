@@ -762,7 +762,7 @@ def set_lock_box_contents(root_id: str, item_id: str, encrypted_contents: str = 
 
 
 @app.patch("/api/dimensions/{root_id}/items/{item_id}/lockbox")
-def update_lock_box_metadata(
+async def update_lock_box_metadata(
     root_id: str,
     item_id: str,
     actor_latitude: float = Form(...),
@@ -771,6 +771,7 @@ def update_lock_box_metadata(
     box_description: str | None = Form(default=None),
     box_image: str | None = Form(default=None),
     box_image_clear: str | None = Form(default=None),
+    box_image_file: UploadFile | None = File(default=None),
     box_url: HttpUrl | None = Form(default=None),
     box_url_clear: str | None = Form(default=None),
     user: dict = Depends(get_current_user)
@@ -801,6 +802,20 @@ def update_lock_box_metadata(
 
     if should_clear_image:
         box.box_image = None
+        box.box_image_upload_path = None
+    elif box_image_file:
+        suffix = Path(box_image_file.filename or "image.bin").suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            content = await box_image_file.read()
+            tmp.write(content)
+        try:
+            upload_path = storage.save_upload(tmp_path, box_image_file.filename or "image.bin")
+            box.box_image_upload_path = upload_path
+            box.box_image = None
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
     elif box_image is not None:
         box.box_image = box_image
 

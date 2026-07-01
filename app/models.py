@@ -60,7 +60,8 @@ class LockBoxItemDocument(ItemDocument):
     type: Literal[ItemType.LOCK_BOX]  # pyright: ignore[reportIncompatibleVariableOverride]
     box_name: str | None = Field(default=None, max_length=128)
     box_description: str | None = Field(default=None, max_length=2000)
-    box_image: str | None = None
+    box_image: str | None = None  # file path or data URL for backwards compatibility
+    box_image_upload_path: str | None = None  # uploaded file path (new)
     box_url: HttpUrl | None = None
     encrypted_contents: str | None = None
 
@@ -109,6 +110,7 @@ class PlaceLockBoxItemRequest(BasePlacementRequest):
     box_name: str | None = Field(default=None, max_length=128)
     box_description: str | None = Field(default=None, max_length=2000)
     box_image: str | None = None
+    box_image_upload_path: str | None = None
     box_url: HttpUrl | None = None
     encrypted_contents: str | None = None
 
